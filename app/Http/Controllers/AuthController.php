@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\Role;
 use App\Models\User;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
@@ -44,7 +45,11 @@ class AuthController extends Controller
 
         $user->save();
 
-        $user->assignRole('member'); // rôle par défaut
+        $role = Role::where('name', 'member')->first();
+
+        if ($role) {
+            $user->roles()->attach($role->id);
+        }
 
         $token = $user->createToken('auth_token')->plainTextToken;
 

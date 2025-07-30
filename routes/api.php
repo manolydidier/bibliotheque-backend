@@ -24,4 +24,4 @@ Route::get('/users-roles-permissions', [UserRolePermissionController::class, 'in
 Route::post('/users', [UserCreationController::class, 'store']);
 
 Route::post('/login', [AuthController::class, 'login']);
-
+Route::post('/logout', [AuthController::class, 'logout']);
