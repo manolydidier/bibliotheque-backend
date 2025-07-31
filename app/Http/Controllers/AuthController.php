@@ -156,4 +156,41 @@ class AuthController extends Controller
             ], 500);
         }
     }
+
+    /**
+     * Mise à jour de l'avatar de l'utilisateur connecté
+     */
+  public function updateAvatar(Request $request, $id)
+{
+    $validator = Validator::make($request->all(), [
+        'avatar' => 'required|image|mimes:jpeg,png,jpg,gif|max:2048'
+    ]);
+
+    if ($validator->fails()) {
+        return response()->json([
+            'message' => 'Échec de validation',
+            'errors'  => $validator->errors()
+        ], 422);
+    }
+
+    try {
+        $user = User::findOrFail($id);
+
+        $path = $request->file('avatar')->store('avatars', 'public');
+        $user->avatar = $path;
+        $user->save();
+
+        return response()->json([
+            'message'     => 'Avatar mis à jour avec succès',
+            'avatar_url'  => asset('storage/' . $path)
+        ]);
+    } catch (\Exception $e) {
+        \Log::error('Erreur updateAvatar user_id='.$id.': '.$e->getMessage());
+
+        return response()->json([
+            'message' => 'Erreur lors de la mise à jour de l\'avatar',
+            'error'   => config('app.debug') ? $e->getMessage() : null
+        ], 500);
+    }
+}
 }

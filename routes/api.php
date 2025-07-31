@@ -24,4 +24,6 @@ Route::get('/users-roles-permissions', [UserRolePermissionController::class, 'in
 Route::post('/users', [UserCreationController::class, 'store']);
 
 Route::post('/login', [AuthController::class, 'login']);
+
 Route::post('/logout', [AuthController::class, 'logout']);
+Route::middleware('auth:sanctum')->put('/user/{id}/avatar', [AuthController::class, 'updateAvatar']);
