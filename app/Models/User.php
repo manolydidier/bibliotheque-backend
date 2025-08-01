@@ -7,7 +7,7 @@ use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
 use Illuminate\Support\Facades\Hash;
 use Laravel\Sanctum\HasApiTokens;
-
+use Illuminate\Support\Str;
 class User extends Authenticatable
 {
     use HasApiTokens, HasFactory, Notifiable;
@@ -69,4 +69,20 @@ class User extends Authenticatable
     {
         return $this->permissions()->contains('name', $permissionName);
     }
+    
+public function getAvatarUrlFullAttribute(): ?string
+{
+    // Si le champ est vide
+    if (! $this->avatar_url) {
+        return null;
+    }
+
+    // Si le champ contient déjà une URL distante (bonus sécurité)
+    if (Str::startsWith($this->avatar_url, ['http://', 'https://'])) {
+        return $this->avatar_url;
+    }
+
+    // Sinon, construire l’URL locale
+    return asset('storage/' . $this->avatar_url);
+}
 }

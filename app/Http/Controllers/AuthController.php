@@ -4,11 +4,15 @@ namespace App\Http\Controllers;
 
 use App\Models\Role;
 use App\Models\User;
+use Illuminate\Database\Eloquent\ModelNotFoundException;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
+use Intervention\Image\Facades\Image;
 
 class AuthController extends Controller
 {
@@ -160,37 +164,92 @@ class AuthController extends Controller
     /**
      * Mise à jour de l'avatar de l'utilisateur connecté
      */
+
+
   public function updateAvatar(Request $request, $id)
 {
-    $validator = Validator::make($request->all(), [
-        'avatar' => 'required|image|mimes:jpeg,png,jpg,gif|max:2048'
+    
+    $start = microtime(true);
+
+    $request->validate([
+        'avatar_url' => 'required|image|mimes:jpeg,png,jpg|max:2048'
     ]);
 
-    if ($validator->fails()) {
+    // 🔍 Log debug réception fichier
+    Log::debug('Fichier reçu', [
+        'is_file' => $request->hasFile('avatar_url'),
+        'mime'    => $request->file('avatar_url')?->getMimeType(),
+        'size_kb' => round($request->file('avatar_url')?->getSize() / 1024, 2),
+        'original_name' => $request->file('avatar_url')?->getClientOriginalName()
+    ]);
+
+    $user = User::findOrFail($id);
+
+    // 🔥 Purge éventuelle de l’ancien avatar
+    if ($user->avatar_url && Storage::disk('public')->exists($user->avatar_url)) {
+        Storage::disk('public')->delete($user->avatar_url);
+    }
+
+    // 📂 Stockage du nouveau fichier
+    $path = $request->file('avatar_url')->store("avatars/{$id}", 'public');
+    $user->avatar_url = $path;
+    $user->save();
+
+    $duration = round((microtime(true) - $start) * 1000, 2);
+
+    // 📝 Log de succès
+    Log::info('updateAvatar', [
+        'user_id'     => $user->id,
+        'avatar_path' => $path,
+        'duration_ms' => $duration,
+        'source'      => 'upload fichier'
+    ]);
+
+    return response()->json([
+        'message'     => 'Avatar mis à jour avec fichier',
+        'avatar_url'  => $user->avatar_url,
+        'duration_ms' => $duration
+    ]);
+}
+
+
+
+public function updatePassword(Request $request, $userId)
+{
+    $request->validate([
+        'current_password' => 'required|string',
+        'password' => 'required|string|min:8|confirmed',
+    ]);
+
+    $user = User::findOrFail($userId);
+
+    //  Vérification de l'autorisation
+    //  if (Auth::id() != $user->id) {
+    //     return response()->json([
+    //      'message' => __('Unauthorized action'),
+    //     ], 403);
+    // }
+
+    // Vérification du mot de passe actuel
+    if (!Hash::check($request->current_password, $user->password)) {
         return response()->json([
-            'message' => 'Échec de validation',
-            'errors'  => $validator->errors()
+            'message' => __('The current password is incorrect'),
+            'errors' => ['current_password' => [__('The current password is incorrect')]]
         ], 422);
     }
 
-    try {
-        $user = User::findOrFail($id);
+    // Mise à jour du mot de passe (le mutator s'occupe du hachage)
+    $user->password = $request->password; // Le mutator setPasswordAttribute fera le Hash
+    $user->save();
 
-        $path = $request->file('avatar')->store('avatars', 'public');
-        $user->avatar = $path;
-        $user->save();
+    // Révoquer tous les tokens existants (important pour Sanctum)
+    $user->tokens()->delete();
 
-        return response()->json([
-            'message'     => 'Avatar mis à jour avec succès',
-            'avatar_url'  => asset('storage/' . $path)
-        ]);
-    } catch (\Exception $e) {
-        \Log::error('Erreur updateAvatar user_id='.$id.': '.$e->getMessage());
-
-        return response()->json([
-            'message' => 'Erreur lors de la mise à jour de l\'avatar',
-            'error'   => config('app.debug') ? $e->getMessage() : null
-        ], 500);
-    }
+    return response()->json([
+        'message' => __('Password updated successfully'),
+    ]);
 }
+
 }
+
+
