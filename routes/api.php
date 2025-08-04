@@ -29,14 +29,16 @@ Route::post('/login', [AuthController::class, 'login']);
 
 
 
-    Route::post('/logout', [AuthController::class, 'logout']);
-    Route::post('/user/{id}/avatar', [AuthController::class, 'updateAvatar']);
-    Route::post('/auth/{id}/updatepassword', [AuthController::class, 'updatePassword']);
-
-
+    Route::post('/logout', [AuthController::class, 'logout'])->middleware('auth:sanctum')->middleware('auth:sanctum');
+    Route::post('/user/{id}/avatar', [AuthController::class, 'updateAvatar'])->middleware('auth:sanctum');
+    Route::post('/auth/{id}/updatepassword', [AuthController::class, 'updatePassword'])->middleware('auth:sanctum');
+    Route::get('/user/{id}/profile', [AuthController::class, 'showProfile'])->middleware('auth:sanctum');
+    Route::post('/user/{id}/edit', [AuthController::class, 'updateProfile'])->middleware('auth:sanctum');
+    Route::get('/users', [AuthController::class, 'index'])->middleware('auth:sanctum');
+    
     // Testez ceci dans routes/web.php
-Route::get('/test-log', function() {
-    \Log::info('Ceci est un test de log');
+    Route::get('/test-log', function() {
+    Log::info('Ceci est un test de log');
     return response()->json(['message' => 'Check storage/logs/laravel.log']);
 });
 
