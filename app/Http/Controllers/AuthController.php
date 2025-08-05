@@ -422,4 +422,84 @@ public function index(Request $request)
         ]
     ]);
 }
+
+    // 🔐 Soft delete d’un utilisateur
+   
+    public function delete($id)
+    {
+        $user = User::find($id);
+
+        if (! $user) {
+            return response()->json(['message' => 'Utilisateur introuvable'], 404);
+        }
+
+        $user->delete(); // Soft delete
+        return response()->json(['message' => 'Utilisateur désactivé'], 200);
+    }
+
+    // ♻️ Restauration d’un utilisateur soft deleted
+    public function restore($id)
+    {
+        $user = User::withTrashed()->find($id);
+
+        if (! $user || ! $user->trashed()) {
+            return response()->json(['message' => 'Utilisateur non supprimé'], 404);
+        }
+
+        $user->restore();
+        return response()->json(['message' => 'Utilisateur restauré'], 200);
+    }
+
+    // 🧨 Suppression définitive d’un utilisateur
+    public function forceDelete($id)
+    {
+        $user = User::withTrashed()->find($id);
+
+        if (! $user) {
+            return response()->json(['message' => 'Utilisateur introuvable'], 404);
+        }
+
+        $user->forceDelete();
+        return response()->json(['message' => 'Utilisateur supprimé définitivement'], 200);
+    }
+
+    // 📋 Lister les utilisateurs supprimés
+    public function listDeleted()
+    {
+        $deletedUsers = User::onlyTrashed()->get();
+        return response()->json($deletedUsers);
+    }
+
+    
+    // update the active login
+
+  public function activate($id)
+{
+    $user = User::find($id);
+
+    if (! $user) {
+        return response()->json(['message' => 'Utilisateur introuvable'], 404);
+    }
+
+    $user->is_active = 1;
+    $user->save();
+
+    return response()->json(['message' => 'Utilisateur activé'], 200);
+}
+
+public function deactivate($id)
+{
+    $user = User::find($id);
+
+    if (! $user) {
+        return response()->json(['message' => 'Utilisateur introuvable'], 404);
+    }
+
+    $user->is_active = 0;
+    $user->save();
+
+    return response()->json(['message' => 'Utilisateur désactivé'], 200);
+}
+
+
 }
