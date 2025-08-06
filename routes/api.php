@@ -3,6 +3,7 @@
 use App\Http\Controllers\AuthController;
 use App\Http\Controllers\RoleController;
 use App\Http\Controllers\UserCreationController;
+use App\Http\Controllers\UserRoleController;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\UserRolePermissionController;
@@ -36,7 +37,7 @@ Route::post('/login', [AuthController::class, 'login']);
     Route::get('/user/{id}/profile', [AuthController::class, 'showProfile'])->middleware('auth:sanctum');
     Route::post('/user/{id}/edit', [AuthController::class, 'updateProfile'])->middleware('auth:sanctum');
     Route::get('/users', [AuthController::class, 'index'])->middleware('auth:sanctum');
-    Route::get('/users', [AuthController::class, 'index'])->middleware('auth:sanctum');
+   
     Route::delete('users/{id}/delete', [AuthController::class, 'delete'])->middleware('auth:sanctum');
     Route::post('users/{id}/activate', [AuthController::class, 'activate']);
     Route::post('users/{id}/deactivate', [AuthController::class, 'deactivate']);
@@ -48,7 +49,15 @@ Route::post('/login', [AuthController::class, 'login']);
     Route::post('/insert', [RoleController::class, 'store']);
     Route::put('{id}', [RoleController::class, 'update']);
     Route::delete('/{id}/delete', [RoleController::class, 'destroy']);
-});
+        });
+
+        // Lecture accessible à tous les utilisateurs authentifiés
+    Route::middleware(['auth:sanctum'])->prefix('userrole')->group(function () {
+    Route::get('/', [UserRoleController::class, 'index']);
+    Route::get('/{userRole}', [UserRoleController::class, 'show']);
+    Route::get('/{userId}/roles', [UserRoleController::class, 'getUserRoles']);
+    Route::get('/{roleId}/users', [UserRoleController::class, 'getRoleUsers']);
+        });
 
     //  Route::post('{id}/restore', [AuthController::class, 'restore']);       // ♻️ Restaurer un utilisateur soft deleted
     //  Route::delete('{id}/force', [AuthController::class, 'forceDelete']);

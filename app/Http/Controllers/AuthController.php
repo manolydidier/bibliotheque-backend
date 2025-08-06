@@ -75,45 +75,49 @@ class AuthController extends Controller
      * 🔓 Connexion avec vérification et génération du token
      */
     public function login(Request $request): JsonResponse
-    {
-        $validator = Validator::make($request->all(), [
-            'email'    => 'required|email',
-            'password' => 'required|string',
-        ]);
+{
+    $validator = Validator::make($request->all(), [
+        'email'    => 'required|email',
+        'password' => 'required|string',
+    ]);
 
-        if ($validator->fails()) {
-            return response()->json([
-                'message' => 'Validation failed',
-                'errors'  => $validator->errors()
-            ], 422);
-        }
-
-        $user = User::where('email', $request->email)->first();
-
-        if (! $user || ! Hash::check($request->password, $user->password)) {
-            return response()->json([
-                'message' => 'Invalid credentials',
-                'error'   => 'The provided credentials are incorrect.'
-            ], 401);
-        }
-
-        if (! $user->is_active) {
-            return response()->json([
-                'message' => 'Account disabled'
-            ], 403);
-        }
-
-        $token = $user->createToken('auth_token')->plainTextToken;
-
+    if ($validator->fails()) {
         return response()->json([
-            'message'     => 'Login success',
-            'token'       => $token,
-            'token_type'  => 'Bearer',
-            'user'        => $user->load('roles'),
-            'roles'       => $user->roles,
-            'permissions' => method_exists($user, 'permissions') ? $user->permissions() : []
-        ]);
+            'message' => 'Validation failed',
+            'errors'  => $validator->errors()
+        ], 422);
     }
+
+    $user = User::where('email', $request->email)->first();
+
+    if (! $user || ! Hash::check($request->password, $user->password)) {
+        return response()->json([
+            'message' => 'Invalid credentials',
+            'error'   => 'The provided credentials are incorrect.'
+        ], 401);
+    }
+
+    if (! $user->is_active) {
+        return response()->json([
+            'message' => 'Account disabled'
+        ], 403);
+    }
+
+    // ✅ Mise à jour du champ last_login avec la date actuelle
+    $user->last_login = now();
+    $user->save();
+
+    $token = $user->createToken('auth_token')->plainTextToken;
+
+    return response()->json([
+        'message'     => 'Login success',
+        'token'       => $token,
+        'token_type'  => 'Bearer',
+        'user'        => $user->load('roles'),
+        'roles'       => $user->roles,
+        'permissions' => method_exists($user, 'permissions') ? $user->permissions() : []
+    ]);
+}
 
     /**
      * 🧑‍💻 Récupération de l'utilisateur connecté
