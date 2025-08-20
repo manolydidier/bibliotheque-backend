@@ -17,27 +17,43 @@ class UserRoleController extends Controller
     /**
      * Afficher la liste des attributions de rôles
      */
-    public function index(Request $request): JsonResponse
-    {
-        $query = UserRole::with(['user', 'role', 'assignedBy']);
+   public function index(Request $request): JsonResponse
+{
+    // Construire la requête avec les relations
+    $query = UserRole::with(['user', 'role', 'assignedBy']);
 
-        // Filtres optionnels
-        if ($request->has('user_id')) {
-            $query->forUser($request->user_id);
-        }
-
-        if ($request->has('role_id')) {
-            $query->forRole($request->role_id);
-        }
-
-        // Pagination
-        $userRoles = $query->paginate($request->get('per_page', 15));
-
-        return response()->json([
-            'status' => 'success',
-            'data' => $userRoles,
-        ]);
+    // 🔍 Recherche globale
+    if ($request->filled('search')) {
+        $search = $request->search;
+        $query->whereHas('user', function ($q) use ($search) {
+            $q->where('username', 'like', "%{$search}%")
+              ->orWhere('email', 'like', "%{$search}%")
+              ->orWhere('first_name', 'like', "%{$search}%")
+              ->orWhere('last_name', 'like', "%{$search}%");
+        })->orWhereHas('role', function ($q) use ($search) {
+            $q->where('name', 'like', "%{$search}%")
+              ->orWhere('description', 'like', "%{$search}%");
+        });
     }
+
+    // 🎯 Filtres optionnels
+    if ($request->has('user_id')) {
+        $query->forUser($request->user_id);
+    }
+
+    if ($request->has('role_id')) {
+        $query->forRole($request->role_id);
+    }
+
+    // 📄 Pagination
+    $perPage = $request->get('per_page', 10);
+    $userRoles = $query->latest()->paginate($perPage);
+
+    return response()->json([
+        'status' => 'success',
+        'data' => $userRoles, // Laravel gère automatiquement la pagination
+    ]);
+}
 
     /**
      * Créer une nouvelle attribution de rôle
@@ -84,7 +100,7 @@ class UserRoleController extends Controller
                 'status' => 'success',
                 'message' => 'Attribution de rôle créée avec succès.',
                 'data' => $userRole,
-            ], 201);
+            ], 200);
 
         } catch (QueryException $e) {
             return response()->json([
@@ -118,55 +134,67 @@ class UserRoleController extends Controller
      * Mettre à jour une attribution de rôle
      */
     public function update(Request $request, $id): JsonResponse
-    {
-        $userRole = UserRole::find($id);
+{
+    $userRole = UserRole::find($id);
 
-        if (!$userRole) {
-            return response()->json([
-                'status' => 'error',
-                'message' => 'Attribution de rôle non trouvée.',
-            ], 404);
-        }
+    if (!$userRole) {
+        return response()->json([
+            'status' => 'error',
+            'message' => 'Attribution de rôle non trouvée.',
+        ], 404);
+    }
 
-        $validated = $request->validate([
-            'user_id' => 'sometimes|required|exists:users,id',
-            'role_id' => [
-                'sometimes',
-                'required',
-                'exists:roles,id',
-                Rule::unique('user_roles')->where(function ($query) use ($request, $userRole) {
-                    $userId = $request->user_id ?? $userRole->user_id;
-                    return $query->where('user_id', $userId);
-                })->ignore($id),
-            ],
-            'assigned_by' => 'nullable|exists:users,id',
-            'assigned_at' => 'nullable|date|before_or_equal:now',
-        ], [
-            'user_id.exists' => 'L\'utilisateur spécifié n\'existe pas.',
-            'role_id.exists' => 'Le rôle spécifié n\'existe pas.',
-            'role_id.unique' => 'Cet utilisateur a déjà ce rôle.',
-            'assigned_by.exists' => 'L\'utilisateur qui assigne le rôle n\'existe pas.',
-            'assigned_at.date' => 'La date d\'attribution doit être une date valide.',
-            'assigned_at.before_or_equal' => 'La date d\'attribution ne peut pas être dans le futur.',
+    $validated = $request->validate([
+        'user_id' => 'sometimes|required|exists:users,id',
+        'role_id' => [
+            'required',
+            'exists:roles,id',
+            Rule::unique('user_roles')->where(function ($query) use ($request, $userRole) {
+                $userId = $request->user_id ?? $userRole->user_id;
+                return $query->where('user_id', $userId);
+            })->ignore($id),
+        ],
+        'assigned_by' => 'nullable|exists:users,id',
+        'assigned_at' => 'nullable|date|before_or_equal:now',
+    ], [
+        'user_id.exists' => 'L\'utilisateur spécifié n\'existe pas.',
+        'role_id.exists' => 'Le rôle spécifié n\'existe pas.',
+        'role_id.unique' => 'Cet utilisateur a déjà ce rôle.',
+        'assigned_by.exists' => 'L\'utilisateur qui assigne le rôle n\'existe pas.',
+        'assigned_at.date' => 'La date d\'attribution doit être une date valide.',
+        'assigned_at.before_or_equal' => 'La date d\'attribution ne peut pas être dans le futur.',
+    ]);
+
+    try {
+        // Supprimer tous les rôles existants de l'utilisateur
+        UserRole::where('user_id', $validated['user_id'] ?? $userRole->user_id)
+                ->delete();
+
+        // Créer la nouvelle attribution de rôle
+        $newUserRole = UserRole::create([
+            'user_id' => $validated['user_id'] ?? $userRole->user_id,
+            'role_id' => $validated['role_id'],
+            'assigned_by' => $validated['assigned_by'] ?? Auth::id(),
+            'assigned_at' => $validated['assigned_at'] ?? now(),
         ]);
 
-        try {
-            $userRole->update($validated);
-            $userRole->load(['user', 'role', 'assignedBy']);
+        // Charger les relations
+        $newUserRole->load(['user', 'role', 'assignedBy']);
 
-            return response()->json([
-                'status' => 'success',
-                'message' => 'Attribution de rôle mise à jour avec succès.',
-                'data' => $userRole,
-            ]);
+        return response()->json([
+            'status' => 'success',
+            'message' => 'Rôle mis à jour avec succès.',
+            'data' => $newUserRole,
+        ]);
 
-        } catch (QueryException $e) {
-            return response()->json([
-                'status' => 'error',
-                'message' => 'Erreur lors de la mise à jour.',
-            ], 500);
-        }
+    } catch (QueryException $e) {
+        return response()->json([
+            'status' => 'error',
+            'message' => 'Erreur lors de la mise à jour du rôle.',
+            'error' => config('app.debug') ? $e->getMessage() : null,
+        ], 500);
     }
+}
 
     /**
      * Supprimer une attribution de rôle

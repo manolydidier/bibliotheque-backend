@@ -6,9 +6,6 @@ use Illuminate\Support\Facades\Schema;
 
 return new class extends Migration
 {
-    /**
-     * Run the migrations.
-     */
     public function up(): void
     {
         Schema::create('permissions', function (Blueprint $table) {
@@ -18,15 +15,12 @@ return new class extends Migration
             $table->string('resource', 50);
             $table->string('action', 50);
             $table->timestamp('created_at')->useCurrent();
+            $table->timestamp('updated_at')->useCurrent()->useCurrentOnUpdate(); // ✅ Ajouté
 
             $table->index(['resource', 'action']);
-
         });
     }
 
-    /**
-     * Reverse the migrations.
-     */
     public function down(): void
     {
         Schema::dropIfExists('permissions');

@@ -1,6 +1,8 @@
 <?php
 
 use App\Http\Controllers\AuthController;
+use App\Http\Controllers\DBController;
+use App\Http\Controllers\PermissionController;
 use App\Http\Controllers\RoleController;
 use App\Http\Controllers\UserCreationController;
 use App\Http\Controllers\UserRoleController;
@@ -45,7 +47,7 @@ Route::post('/login', [AuthController::class, 'login']);
     Route::middleware('auth:sanctum')->prefix('roles')->group(function () {
     Route::get('/', [RoleController::class, 'index']);
     Route::get('/rolesliste', [RoleController::class, 'index2']);
-    Route::get('{id}', [RoleController::class, 'show']);
+    Route::get('/{id}', [RoleController::class, 'show']);
     Route::post('/insert', [RoleController::class, 'store']);
     Route::put('{id}', [RoleController::class, 'update']);
     Route::delete('/{id}/delete', [RoleController::class, 'destroy']);
@@ -57,10 +59,22 @@ Route::post('/login', [AuthController::class, 'login']);
     Route::get('/{userRole}', [UserRoleController::class, 'show']);
     Route::get('/{userId}/roles', [UserRoleController::class, 'getUserRoles']);
     Route::get('/{roleId}/users', [UserRoleController::class, 'getRoleUsers']);
+    Route::post('/user-roles', [UserRoleController::class, 'store']);
+    Route::delete('/{roleId}/delete', [UserRoleController::class, 'destroy']);
         });
 
-    //  Route::post('{id}/restore', [AuthController::class, 'restore']);       // ♻️ Restaurer un utilisateur soft deleted
-    //  Route::delete('{id}/force', [AuthController::class, 'forceDelete']);
+Route::middleware(['auth:sanctum'])->prefix('permissions')->group(function () {
+    Route::get('/', [PermissionController::class, 'index']);           // GET    /api/permissions
+    Route::post('/', [PermissionController::class, 'store']);          // POST   /api/permissions
+    Route::get('/{id}', [PermissionController::class, 'show']);        // GET    /api/permissions/{id}
+    Route::put('/{id}', [PermissionController::class, 'update']);      // PUT    /api/permissions/{id}
+    Route::delete('/{id}', [PermissionController::class, 'destroy']);  // DELETE /api/permissions/{id}
+});
+
+
+    Route::post('/users/{userid}/role', [UserRoleController::class, 'update']);
+    // Route::get('/tables', [DBController::class, 'getTables'])->middleware('auth:sanctum');
+    Route::get('/tables', [DBController::class, 'getTables']);
 
     // Testez ceci dans routes/web.php
     Route::get('/test-log', function() {
