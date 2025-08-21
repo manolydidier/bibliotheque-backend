@@ -4,6 +4,7 @@ use App\Http\Controllers\AuthController;
 use App\Http\Controllers\DBController;
 use App\Http\Controllers\PermissionController;
 use App\Http\Controllers\RoleController;
+use App\Http\Controllers\RolePermissionController;
 use App\Http\Controllers\UserCreationController;
 use App\Http\Controllers\UserRoleController;
 use Illuminate\Http\Request;
@@ -70,7 +71,12 @@ Route::middleware(['auth:sanctum'])->prefix('permissions')->group(function () {
     Route::put('/{id}', [PermissionController::class, 'update']);      // PUT    /api/permissions/{id}
     Route::delete('/{id}', [PermissionController::class, 'destroy']);  // DELETE /api/permissions/{id}
 });
-
+Route::middleware('auth:sanctum')->group(function () {
+    Route::apiResource('role-permissions', RolePermissionController::class);
+    Route::post('/role-permissions', [RolePermissionController::class, 'store']);
+    Route::get('roles/{roleId}/permissions', [RolePermissionController::class, 'permissionsByRole']);
+    Route::get('permissions/{permissionId}/roles', [RolePermissionController::class, 'rolesByPermission']);
+});
 
     Route::post('/users/{userid}/role', [UserRoleController::class, 'update']);
     // Route::get('/tables', [DBController::class, 'getTables'])->middleware('auth:sanctum');
