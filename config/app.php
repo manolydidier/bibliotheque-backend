@@ -12,6 +12,8 @@ return [
     | other UI elements where an application name needs to be displayed.
     |
     */
+    'frontend_url' => env('FRONTEND_URL', 'http://127.0.0.1:5173'),
+
 
     'name' => env('APP_NAME', 'Laravel'),
 
