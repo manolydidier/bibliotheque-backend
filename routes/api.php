@@ -8,6 +8,7 @@ use App\Http\Controllers\RolePermissionController;
 use App\Http\Controllers\UserCreationController;
 use App\Http\Controllers\UserRoleController;
 use App\Http\Controllers\UserRolePermissionController;
+use App\Models\Permission;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\Facades\Log;
@@ -58,6 +59,8 @@ Route::middleware('auth:sanctum')->prefix('roles')->group(function () {
     Route::delete('/{id}/delete', [RoleController::class, 'destroy']);
 });
 
+
+
 Route::middleware(['auth:sanctum'])->prefix('userrole')->group(function () {
     Route::get('/',                [UserRoleController::class, 'index']);
     Route::get('/{userRole}',      [UserRoleController::class, 'show']);
@@ -73,6 +76,9 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('roles/{roleId}/permissions', [RolePermissionController::class, 'permissionsByRole']);
     Route::get('permissions/{permissionId}/roles', [RolePermissionController::class, 'rolesByPermission']);
 });
+Route::get('/permissions', [PermissionController::class, 'index']);
+Route::post('/permissions', [PermissionController::class, 'store']);
+Route::delete('/permissions/{id}', [PermissionController::class, 'destroy']);
 
 Route::post('/users/{userid}/role', [UserRoleController::class, 'update']);
 Route::get('/tables', [DBController::class, 'getTables']);
