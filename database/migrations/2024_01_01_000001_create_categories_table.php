@@ -17,7 +17,7 @@ return new class extends Migration
             $table->unsignedBigInteger('tenant_id')->nullable()->index();
             $table->unsignedBigInteger('parent_id')->nullable()->index();
             $table->string('name', 255);
-            $table->string('slug', 255)->unique();
+            $table->string('slug', 191)->unique();
             $table->text('description')->nullable();
             $table->string('icon', 100)->nullable();
             $table->string('color', 7)->nullable(); // Hex color

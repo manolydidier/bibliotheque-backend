@@ -16,6 +16,8 @@ use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
+use Illuminate\Support\Facades\Cache as CacheFacade;
+use Illuminate\Support\Facades\Storage;
 
 class ArticleController extends Controller
 {
@@ -429,6 +431,313 @@ class ArticleController extends Controller
                     $query->where('reading_time', '<=', $value);
                     break;
             }
+        }
+    }
+
+    /**
+     * Bulk publish articles.
+     */
+    public function bulkPublish(Request $request): JsonResponse
+    {
+        $data = $request->validate([
+            'ids' => ['required', 'array', 'min:1'],
+            'ids.*' => ['integer', 'exists:articles,id'],
+        ]);
+
+        $articles = Article::whereIn('id', $data['ids'])->get();
+        foreach ($articles as $article) {
+            if (Auth::user()->can('publish', $article)) {
+                $this->articleService->publishArticle($article, Auth::user());
+            }
+        }
+
+        return response()->json(['message' => 'Articles publiés']);
+    }
+
+    /**
+     * Bulk unpublish articles.
+     */
+    public function bulkUnpublish(Request $request): JsonResponse
+    {
+        $data = $request->validate([
+            'ids' => ['required', 'array', 'min:1'],
+            'ids.*' => ['integer', 'exists:articles,id'],
+        ]);
+
+        $articles = Article::whereIn('id', $data['ids'])->get();
+        foreach ($articles as $article) {
+            if (Auth::user()->can('publish', $article)) {
+                $this->articleService->unpublishArticle($article, Auth::user());
+            }
+        }
+
+        return response()->json(['message' => 'Articles dépubliés']);
+    }
+
+    /**
+     * Bulk archive (soft-delete) articles.
+     */
+    public function bulkArchive(Request $request): JsonResponse
+    {
+        $data = $request->validate([
+            'ids' => ['required', 'array', 'min:1'],
+            'ids.*' => ['integer', 'exists:articles,id'],
+        ]);
+
+        $articles = Article::whereIn('id', $data['ids'])->get();
+        foreach ($articles as $article) {
+            if (Auth::user()->can('delete', $article)) {
+                $article->delete();
+            }
+        }
+
+        return response()->json(['message' => 'Articles archivés']);
+    }
+
+    /**
+     * Bulk delete articles.
+     */
+    public function bulkDelete(Request $request): JsonResponse
+    {
+        $data = $request->validate([
+            'ids' => ['required', 'array', 'min:1'],
+            'ids.*' => ['integer', 'exists:articles,id'],
+            'force' => ['nullable', 'boolean'],
+        ]);
+
+        $force = (bool) ($data['force'] ?? false);
+        $articles = Article::withTrashed()->whereIn('id', $data['ids'])->get();
+        foreach ($articles as $article) {
+            if (Auth::user()->can('delete', $article)) {
+                $force ? $article->forceDelete() : $article->delete();
+            }
+        }
+
+        return response()->json(['message' => $force ? 'Articles supprimés définitivement' : 'Articles supprimés']);
+    }
+
+    /**
+     * Bulk move to category.
+     */
+    public function bulkMoveCategory(Request $request): JsonResponse
+    {
+        $data = $request->validate([
+            'ids' => ['required', 'array', 'min:1'],
+            'ids.*' => ['integer', 'exists:articles,id'],
+            'category_id' => ['required', 'integer', 'exists:categories,id'],
+        ]);
+
+        $articles = Article::whereIn('id', $data['ids'])->get();
+        foreach ($articles as $article) {
+            if (!Auth::user()->can('update', $article)) {
+                continue;
+            }
+            $existing = $article->categories()->pluck('categories.id')->toArray();
+            $sync = array_fill_keys($existing, ['is_primary' => false, 'sort_order' => 0]);
+            $sync[(int) $data['category_id']] = ['is_primary' => true, 'sort_order' => 0];
+            $article->categories()->sync($sync);
+        }
+
+        return response()->json(['message' => 'Articles déplacés de catégorie']);
+    }
+
+    /**
+     * Bulk add tags.
+     */
+    public function bulkAddTags(Request $request): JsonResponse
+    {
+        $data = $request->validate([
+            'ids' => ['required', 'array', 'min:1'],
+            'ids.*' => ['integer', 'exists:articles,id'],
+            'tags' => ['required', 'array', 'min:1'],
+            'tags.*' => ['integer', 'exists:tags,id'],
+        ]);
+
+        $articles = Article::whereIn('id', $data['ids'])->get();
+        foreach ($articles as $article) {
+            if (!Auth::user()->can('update', $article)) {
+                continue;
+            }
+            $article->tags()->syncWithoutDetaching(collect($data['tags'])->mapWithKeys(fn ($id) => [(int) $id => ['sort_order' => 0]])->toArray());
+        }
+
+        return response()->json(['message' => 'Tags ajoutés']);
+    }
+
+    /**
+     * Bulk remove tags.
+     */
+    public function bulkRemoveTags(Request $request): JsonResponse
+    {
+        $data = $request->validate([
+            'ids' => ['required', 'array', 'min:1'],
+            'ids.*' => ['integer', 'exists:articles,id'],
+            'tags' => ['required', 'array', 'min:1'],
+            'tags.*' => ['integer', 'exists:tags,id'],
+        ]);
+
+        $articles = Article::whereIn('id', $data['ids'])->get();
+        foreach ($articles as $article) {
+            if (!Auth::user()->can('update', $article)) {
+                continue;
+            }
+            $article->tags()->detach($data['tags']);
+        }
+
+        return response()->json(['message' => 'Tags retirés']);
+    }
+
+    /**
+     * Import articles from JSON payload (simple placeholder, expand per need).
+     */
+    public function import(Request $request): JsonResponse
+    {
+        $data = $request->validate([
+            'items' => ['required', 'array', 'min:1'],
+            'items.*.title' => ['required', 'string'],
+            'items.*.content' => ['required', 'string'],
+        ]);
+
+        $created = [];
+        foreach ($data['items'] as $item) {
+            $created[] = $this->articleService->createArticle($item, Auth::user());
+        }
+
+        return response()->json(['message' => 'Import terminé', 'count' => count($created)]);
+    }
+
+    /**
+     * Export articles as JSON.
+     */
+    public function export(Request $request): JsonResponse
+    {
+        $articles = Article::with(['categories', 'tags', 'author'])->get();
+        return response()->json(['data' => ArticleResource::collection($articles)]);
+    }
+
+    /**
+     * Provide an import template.
+     */
+    public function downloadTemplate(): JsonResponse
+    {
+        return response()->json([
+            'template' => [
+                'items' => [
+                    ['title' => 'Titre', 'content' => 'Contenu ...', 'status' => 'draft'],
+                ],
+            ],
+        ]);
+    }
+
+    /**
+     * Search suggestions.
+     */
+    public function searchSuggestions(Request $request): JsonResponse
+    {
+        $q = (string) $request->validate(['q' => ['nullable', 'string']])['q'] ?? '';
+        $titles = Article::query()->where('title', 'like', "%{$q}%")->limit(10)->pluck('title');
+        return response()->json(['data' => $titles]);
+    }
+
+    /**
+     * Autocomplete results.
+     */
+    public function autocomplete(Request $request): JsonResponse
+    {
+        $q = (string) $request->validate(['q' => ['nullable', 'string']])['q'] ?? '';
+        $articles = Article::query()->where('title', 'like', "%{$q}%")->limit(10)->get(['id', 'title', 'slug']);
+        return response()->json(['data' => $articles]);
+    }
+
+    /**
+     * robots.txt proxy.
+     */
+    public function robots(): \Illuminate\Http\Response
+    {
+        $content = "User-agent: *\nAllow: /\n";
+        return response($content, 200, ['Content-Type' => 'text/plain']);
+    }
+
+    /**
+     * SEO meta for a single article.
+     */
+    public function metaTags(Article $article): JsonResponse
+    {
+        return response()->json([
+            'title' => $article->title,
+            'description' => $article->meta['description'] ?? null,
+            'keywords' => $article->meta['keywords'] ?? null,
+        ]);
+    }
+
+    /**
+     * Preview article (auth required).
+     */
+    public function preview(Article $article): JsonResponse
+    {
+        if (!Auth::check() || !Auth::user()->can('view', $article)) {
+            return response()->json(['message' => 'Non autorisé'], 403);
+        }
+        return response()->json(['data' => new ArticleResource($article->load(['categories', 'tags', 'author']))]);
+    }
+
+    /**
+     * Generate preview token (placeholder, store in cache for 15 min).
+     */
+    public function generatePreviewToken(Article $article): JsonResponse
+    {
+        if (!Auth::check() || !Auth::user()->can('update', $article)) {
+            return response()->json(['message' => 'Non autorisé'], 403);
+        }
+        $token = bin2hex(random_bytes(16));
+        CacheFacade::put('preview_'.$article->id.'_'.$token, true, 900);
+        return response()->json(['token' => $token]);
+    }
+
+    /**
+     * Webhook endpoints.
+     */
+    public function webhookPublished(Request $request): JsonResponse
+    {
+        return response()->json(['message' => 'Webhook reçu (published)']);
+    }
+
+    public function webhookUpdated(Request $request): JsonResponse
+    {
+        return response()->json(['message' => 'Webhook reçu (updated)']);
+    }
+
+    public function webhookDeleted(Request $request): JsonResponse
+    {
+        return response()->json(['message' => 'Webhook reçu (deleted)']);
+    }
+
+    /**
+     * Health endpoints.
+     */
+    public function health(): JsonResponse
+    {
+        return response()->json(['status' => 'ok']);
+    }
+
+    public function databaseHealth(): JsonResponse
+    {
+        try {
+            Article::query()->select('id')->limit(1)->get();
+            return response()->json(['database' => 'ok']);
+        } catch (\Throwable $e) {
+            return response()->json(['database' => 'error'], 500);
+        }
+    }
+
+    public function cacheHealth(): JsonResponse
+    {
+        try {
+            CacheFacade::put('health_check', '1', 5);
+            $ok = CacheFacade::get('health_check') === '1';
+            return response()->json(['cache' => $ok ? 'ok' : 'error'], $ok ? 200 : 500);
+        } catch (\Throwable $e) {
+            return response()->json(['cache' => 'error'], 500);
         }
     }
 }

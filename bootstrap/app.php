@@ -1,9 +1,10 @@
 <?php
 
-use App\Http\Middleware\CustomAuthenticate;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
+use Illuminate\Http\Middleware\HandleCors;
+use App\Http\Middleware\CustomAuthenticate;
 
 return Application::configure(basePath: dirname(__DIR__))
     ->withRouting(
@@ -13,11 +14,20 @@ return Application::configure(basePath: dirname(__DIR__))
         health: '/up',
     )
     ->withMiddleware(function (Middleware $middleware) {
-        $middleware->alias([
-        'auth' => CustomAuthenticate::class,
-    ]);
+        // ✅ Active le CORS globalement
+        $middleware->append(HandleCors::class);
 
+        // ❗ Ne PAS écraser l’alias "auth" par défaut.
+        // Si tu as un middleware perso, donne-lui un alias séparé :
+        $middleware->alias([
+            'custom.auth' => CustomAuthenticate::class,
+        ]);
+
+        // Si tu DOIS remplacer "auth", assure-toi que ton CustomAuthenticate
+        // étend \Illuminate\Auth\Middleware\Authenticate et supporte les gardes.
+        // $middleware->alias(['auth' => CustomAuthenticate::class]);
     })
     ->withExceptions(function (Exceptions $exceptions) {
         //
-    })->create();
+    })
+    ->create();

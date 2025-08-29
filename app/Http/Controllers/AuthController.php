@@ -475,7 +475,7 @@ class AuthController extends Controller
     /* =========================
      *   🔵 Google OAuth (popup)
      * ========================= */
-    public function googleUrl(Request $request): JsonResponse
+    public function googleRedirect(Request $request): JsonResponse
     {
         // Socialite sans état (Sanctum reste stateless ici)
         $redirect = Socialite::driver('google')

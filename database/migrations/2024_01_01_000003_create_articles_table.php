@@ -16,7 +16,7 @@ return new class extends Migration
             $table->uuid('uuid')->unique()->index();
             $table->unsignedBigInteger('tenant_id')->nullable()->index();
             $table->string('title', 500);
-            $table->string('slug', 500)->unique();
+            $table->string('slug', 191)->unique();
             $table->text('excerpt')->nullable();
             $table->longText('content');
             $table->string('featured_image', 500)->nullable();
