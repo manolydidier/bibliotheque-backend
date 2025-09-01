@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\Api\EmailVerificationController;
+use App\Http\Controllers\Auth\PasswordController;
 use App\Http\Controllers\AuthController;
 use App\Http\Controllers\DBController;
 
@@ -83,9 +84,8 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('permissions/{permissionId}/roles', [RolePermissionController::class, 'rolesByPermission']);
 });
 
-
-
-
+// ========================================
+// AUTHENTIFICATION GOOGLE - API ROUTES
 
 Route::get('/auth/google/redirect', [AuthController::class, 'googleRedirect'])
      ->name('google.redirect');
@@ -105,9 +105,16 @@ Route::get('/auth/google/callback', [AuthController::class, 'googleCallback'])
 });
 
        Route::get('/email/exists', [EmailVerificationController::class, 'exists']);
-Route::post('/email/verification/request', [EmailVerificationController::class, 'requestCode']);
-Route::post('/email/verification/confirm', [EmailVerificationController::class, 'confirm']);
+        Route::post('/email/verification/request', [EmailVerificationController::class, 'requestCode']);
+        Route::post('/email/verification/confirm', [EmailVerificationController::class, 'confirm']);
 
+    // Route::prefix('auth/password')->group(function () {
+    // Route::post('/forgot', [PasswordController::class, 'sendResetLink'])->middleware('throttle:10,1');
+    // Route::post('/reset',  [PasswordController::class, 'reset'])->middleware('throttle:10,1');
+    //     });
+
+Route::post('auth/password/forgot', [PasswordController::class, 'forgot']);
+Route::post('auth/password/reset',  [PasswordController::class, 'reset']);
 // ========================================
 // MODULE ARTICLES - API ROUTES
 // ========================================

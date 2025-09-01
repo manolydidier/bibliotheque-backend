@@ -1,26 +1,30 @@
 <?php
 
 return [
+
     'paths' => [
         'api/*',
         'sanctum/csrf-cookie',
         'oauth/*',
         'login',
         'logout',
-        'register'
+        'register',
     ],
 
     'allowed_methods' => ['*'],
 
+    // Laisse uniquement les origines FRONT ici (pas besoin du backend)
     'allowed_origins' => [
-        'http://localhost:5173', // L'origine de votre frontend
-        'http://127.0.0.1:5173', // L'origine de votre frontend (si vous l'utilisez)
-        'http://127.0.0.1:8000', // Backend local
-        'https://ton-domaine-front.com', // Autre domaine front
-        env('FRONTEND_URL', 'http://127.0.0.1:5173')
+        'http://localhost:5173',
+        'http://127.0.0.1:5173',
+        env('FRONTEND_URL', 'http://localhost:5173'),
     ],
 
-    'allowed_origins_patterns' => [],
+    // Option : patterns pour tolérer n’importe quel port en dev
+    'allowed_origins_patterns' => [
+        '/^http:\/\/localhost(:\d+)?$/',
+        '/^http:\/\/127\.0\.0\.1(:\d+)?$/',
+    ],
 
     'allowed_headers' => ['*'],
 
@@ -28,7 +32,6 @@ return [
 
     'max_age' => 0,
 
-    'supports_credentials' => true, // Important pour Sanctum
+    // Si tu utilises des cookies/Sanctum sur d'autres routes :
+    'supports_credentials' => true,
 ];
-
-
