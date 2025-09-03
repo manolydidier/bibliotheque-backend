@@ -10,10 +10,12 @@ use App\Http\Controllers\RoleController;
 use App\Http\Controllers\RolePermissionController;
 use App\Http\Controllers\UserCreationController;
 use App\Http\Controllers\UserRoleController;
-use App\Http\Controllers\Api\TagController;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\UserRolePermissionController;
+
+use App\Http\Controllers\Api\TagController;
+use App\Http\Controllers\Api\CategoryController;
 
 use Illuminate\Support\Facades\Log;
 
@@ -119,8 +121,12 @@ Route::post('auth/password/reset',  [PasswordController::class, 'reset']);
 
 // ========================================
 //TAGS
-
 Route::apiResource('tags', TagController::class);
+
+// ========================================
+//CATEGORIES
+Route::apiResource('categories', CategoryController::class);
+
 
 
 // ========================================

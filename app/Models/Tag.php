@@ -81,12 +81,11 @@ class Tag extends Model
         $query->orderBy('usage_count', 'desc')->orderBy('name');
     }
 
-    // Accessors & Mutators
-    // Accessors & Mutators corrigés
+    // Accessors & Mutators  
     protected function slug(): Attribute
     {
         return Attribute::make(
-            get: fn($value) => $value, // Supprimez le type string
+            get: fn($value) => $value, 
             set: fn($value) => $value ? Str::slug($value) : null,
         );
     }
@@ -94,7 +93,7 @@ class Tag extends Model
     protected function name(): Attribute
     {
         return Attribute::make(
-            get: fn($value) => $value, // Supprimez le type string
+            get: fn($value) => $value, 
             set: fn($value) => $value ? ucfirst(trim($value)) : null,
         );
     }
