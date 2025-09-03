@@ -14,9 +14,10 @@ use Illuminate\Support\Str;
 
 class Tag extends Model
 {
-    use HasFactory, SoftDeletes, HasUuids;
+    use HasFactory, SoftDeletes;
 
     protected $fillable = [
+        'uuid',
         'tenant_id',
         'name',
         'slug',
@@ -28,6 +29,7 @@ class Tag extends Model
         'created_by',
         'updated_by',
     ];
+    
 
     protected $casts = [
         'meta' => 'array',
@@ -80,19 +82,20 @@ class Tag extends Model
     }
 
     // Accessors & Mutators
+    // Accessors & Mutators corrigés
     protected function slug(): Attribute
     {
         return Attribute::make(
-            get: fn (string $value) => $value,
-            set: fn (string $value) => Str::slug($value),
+            get: fn($value) => $value, // Supprimez le type string
+            set: fn($value) => $value ? Str::slug($value) : null,
         );
     }
 
     protected function name(): Attribute
     {
         return Attribute::make(
-            get: fn (string $value) => $value,
-            set: fn (string $value) => ucfirst(trim($value)),
+            get: fn($value) => $value, // Supprimez le type string
+            set: fn($value) => $value ? ucfirst(trim($value)) : null,
         );
     }
 
@@ -123,6 +126,10 @@ class Tag extends Model
     protected static function booted(): void
     {
         static::creating(function (Tag $tag) {
+             if (empty($tag->uuid)) {
+                $tag->uuid = Str::uuid()->toString();
+            }
+
             if (empty($tag->slug)) {
                 $tag->slug = Str::slug($tag->name);
             }

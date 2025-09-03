@@ -10,6 +10,7 @@ use App\Http\Controllers\RoleController;
 use App\Http\Controllers\RolePermissionController;
 use App\Http\Controllers\UserCreationController;
 use App\Http\Controllers\UserRoleController;
+use App\Http\Controllers\Api\TagController;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\UserRolePermissionController;
@@ -115,6 +116,13 @@ Route::get('/auth/google/callback', [AuthController::class, 'googleCallback'])
 
 Route::post('auth/password/forgot', [PasswordController::class, 'forgot']);
 Route::post('auth/password/reset',  [PasswordController::class, 'reset']);
+
+// ========================================
+//TAGS
+
+Route::apiResource('tags', TagController::class);
+
+
 // ========================================
 // MODULE ARTICLES - API ROUTES
 // ========================================
