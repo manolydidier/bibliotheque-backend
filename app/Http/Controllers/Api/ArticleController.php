@@ -15,17 +15,29 @@ use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Validation\ValidationException;
 use Illuminate\Support\Facades\Cache as CacheFacade;
-use Illuminate\Support\Facades\Storage;
 
 class ArticleController extends Controller
 {
-    public function __construct(
-        private readonly ArticleService $articleService
-    ) {
+    use \Illuminate\Foundation\Auth\Access\AuthorizesRequests;
+   // (tu peux enlever le "use AuthorizesRequests" ici, il est déjà dans le contrôleur de base)
+    public function __construct(private readonly ArticleService $articleService)
+    {
+        // Auth publique limitée
         $this->middleware('auth:sanctum')->except(['index', 'show', 'search']);
-        $this->middleware('throttle:60,1')->only(['store', 'update', 'destroy']);
+
+        // Throttle propre (RateLimiter 'article-actions' défini dans AppServiceProvider)
+        $this->middleware('throttle:article-actions')->only(['store', 'update', 'destroy']);
+
+        // Autorisations via Policy (index/show/store/update/destroy)
+        $this->authorizeResource(\App\Models\Article::class, 'article');
+
+        // Actions custom protégées par la policy (si tu les utilises)
+        $this->middleware('can:publish,article')->only(['publish', 'unpublish', 'bulkPublish', 'bulkUnpublish']);
+        $this->middleware('can:viewStats,article')->only(['stats']);
+        $this->middleware('can:update,article')->only(['toggleFeatured', 'generatePreviewToken', 'bulkMoveCategory', 'bulkAddTags', 'bulkRemoveTags']);
+        $this->middleware('can:create,App\Models\Article')->only(['duplicate', 'import']);
+        $this->middleware('can:delete,article')->only(['destroy', 'bulkArchive', 'bulkDelete']);
     }
 
     /**
@@ -109,7 +121,7 @@ class ArticleController extends Controller
             $perPage = $request->get('per_page', 15);
             $articles = $query->paginate($perPage);
 
-            return ArticleCollection::make($articles);
+            return ArticleResource::collection($articles);
         });
     }
 
@@ -118,11 +130,9 @@ class ArticleController extends Controller
      */
     public function store(StoreArticleRequest $request): JsonResponse
     {
+        DB::beginTransaction();
         try {
-            DB::beginTransaction();
-
-            $article = $this->articleService->createArticle($request->validated(), Auth::user());
-
+            $article = $this->articleService->createArticle($request->validated(), $request->user());
             DB::commit();
 
             return response()->json([
@@ -130,9 +140,8 @@ class ArticleController extends Controller
                 'data' => new ArticleResource($article->load(['categories', 'tags', 'author'])),
             ], 201);
 
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
             DB::rollBack();
-            
             return response()->json([
                 'message' => 'Erreur lors de la création de l\'article',
                 'error' => config('app.debug') ? $e->getMessage() : 'Une erreur est survenue',
@@ -142,21 +151,17 @@ class ArticleController extends Controller
 
     /**
      * Display the specified article.
+     * Binding {article:slug} requis côté routes.
      */
-    public function show(Request $request, string $slug): JsonResponse
+    public function show(Request $request, Article $article): JsonResponse
     {
-        $article = Article::where('slug', $slug)
-            ->with(['categories', 'tags', 'author', 'media', 'approvedComments.user'])
-            ->withCount(['comments', 'ratings', 'shares'])
-            ->withAvg('ratings', 'rating')
-            ->firstOrFail();
+        // Policy: ArticlePolicy@view gère public/private
+        $this->authorize('view', $article);
 
-        // Check if user can view this article
-        if (!$article->canBeViewedBy(Auth::user())) {
-            return response()->json([
-                'message' => 'Accès non autorisé à cet article',
-            ], 403);
-        }
+        // Chargements
+        $article->load(['categories', 'tags', 'author', 'media', 'approvedComments.user'])
+                ->loadCount(['comments', 'ratings', 'shares'])
+                ->loadAvg('ratings', 'rating');
 
         // Increment view count (with rate limiting)
         $cacheKey = "article_view_{$article->id}_" . ($request->ip() ?? 'unknown');
@@ -175,18 +180,11 @@ class ArticleController extends Controller
      */
     public function update(UpdateArticleRequest $request, Article $article): JsonResponse
     {
-        // Check permissions
-        if (!Auth::user()->can('update', $article)) {
-            return response()->json([
-                'message' => 'Vous n\'êtes pas autorisé à modifier cet article',
-            ], 403);
-        }
+        $this->authorize('update', $article);
 
+        DB::beginTransaction();
         try {
-            DB::beginTransaction();
-
-            $updatedArticle = $this->articleService->updateArticle($article, $request->validated(), Auth::user());
-
+            $updatedArticle = $this->articleService->updateArticle($article, $request->validated(), $request->user());
             DB::commit();
 
             return response()->json([
@@ -194,9 +192,8 @@ class ArticleController extends Controller
                 'data' => new ArticleResource($updatedArticle->load(['categories', 'tags', 'author'])),
             ]);
 
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
             DB::rollBack();
-            
             return response()->json([
                 'message' => 'Erreur lors de la mise à jour de l\'article',
                 'error' => config('app.debug') ? $e->getMessage() : 'Une erreur est survenue',
@@ -209,27 +206,19 @@ class ArticleController extends Controller
      */
     public function destroy(Article $article): JsonResponse
     {
-        // Check permissions
-        if (!Auth::user()->can('delete', $article)) {
-            return response()->json([
-                'message' => 'Vous n\'êtes pas autorisé à supprimer cet article',
-            ], 403);
-        }
+        $this->authorize('delete', $article);
 
+        DB::beginTransaction();
         try {
-            DB::beginTransaction();
-
             $this->articleService->deleteArticle($article);
-
             DB::commit();
 
             return response()->json([
                 'message' => 'Article supprimé avec succès',
             ]);
 
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
             DB::rollBack();
-            
             return response()->json([
                 'message' => 'Erreur lors de la suppression de l\'article',
                 'error' => config('app.debug') ? $e->getMessage() : 'Une erreur est survenue',
@@ -267,7 +256,7 @@ class ArticleController extends Controller
         $perPage = $request->get('per_page', 20);
         $articles = $query->ordered()->paginate($perPage);
 
-        return ArticleCollection::make($articles);
+        return ArticleResource::collection($articles);
     }
 
     /**
@@ -275,21 +264,17 @@ class ArticleController extends Controller
      */
     public function publish(Article $article): JsonResponse
     {
-        if (!Auth::user()->can('publish', $article)) {
-            return response()->json([
-                'message' => 'Vous n\'êtes pas autorisé à publier cet article',
-            ], 403);
-        }
+        $this->authorize('publish', $article);
 
         try {
-            $this->articleService->publishArticle($article, Auth::user());
+            $this->articleService->publishArticle($article, request()->user());
 
             return response()->json([
                 'message' => 'Article publié avec succès',
                 'data' => new ArticleResource($article->load(['categories', 'tags', 'author'])),
             ]);
 
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
             return response()->json([
                 'message' => 'Erreur lors de la publication de l\'article',
                 'error' => config('app.debug') ? $e->getMessage() : 'Une erreur est survenue',
@@ -302,21 +287,17 @@ class ArticleController extends Controller
      */
     public function unpublish(Article $article): JsonResponse
     {
-        if (!Auth::user()->can('publish', $article)) {
-            return response()->json([
-                'message' => 'Vous n\'êtes pas autorisé à dépublier cet article',
-            ], 403);
-        }
+        $this->authorize('publish', $article);
 
         try {
-            $this->articleService->unpublishArticle($article, Auth::user());
+            $this->articleService->unpublishArticle($article, request()->user());
 
             return response()->json([
                 'message' => 'Article dépublié avec succès',
                 'data' => new ArticleResource($article->load(['categories', 'tags', 'author'])),
             ]);
 
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
             return response()->json([
                 'message' => 'Erreur lors de la dépublication de l\'article',
                 'error' => config('app.debug') ? $e->getMessage() : 'Une erreur est survenue',
@@ -329,17 +310,11 @@ class ArticleController extends Controller
      */
     public function duplicate(Article $article): JsonResponse
     {
-        if (!Auth::user()->can('create', Article::class)) {
-            return response()->json([
-                'message' => 'Vous n\'êtes pas autorisé à créer des articles',
-            ], 403);
-        }
+        $this->authorize('create', Article::class);
 
+        DB::beginTransaction();
         try {
-            DB::beginTransaction();
-
-            $duplicatedArticle = $this->articleService->duplicateArticle($article, Auth::user());
-
+            $duplicatedArticle = $this->articleService->duplicateArticle($article, request()->user());
             DB::commit();
 
             return response()->json([
@@ -347,9 +322,8 @@ class ArticleController extends Controller
                 'data' => new ArticleResource($duplicatedArticle->load(['categories', 'tags', 'author'])),
             ], 201);
 
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
             DB::rollBack();
-            
             return response()->json([
                 'message' => 'Erreur lors de la duplication de l\'article',
                 'error' => config('app.debug') ? $e->getMessage() : 'Une erreur est survenue',
@@ -362,11 +336,7 @@ class ArticleController extends Controller
      */
     public function toggleFeatured(Article $article): JsonResponse
     {
-        if (!Auth::user()->can('update', $article)) {
-            return response()->json([
-                'message' => 'Vous n\'êtes pas autorisé à modifier cet article',
-            ], 403);
-        }
+        $this->authorize('update', $article);
 
         try {
             $article->update(['is_featured' => !$article->is_featured]);
@@ -376,7 +346,7 @@ class ArticleController extends Controller
                 'data' => new ArticleResource($article->load(['categories', 'tags', 'author'])),
             ]);
 
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
             return response()->json([
                 'message' => 'Erreur lors de la modification du statut',
                 'error' => config('app.debug') ? $e->getMessage() : 'Une erreur est survenue',
@@ -389,11 +359,7 @@ class ArticleController extends Controller
      */
     public function stats(Article $article): JsonResponse
     {
-        if (!Auth::user()->can('viewStats', $article)) {
-            return response()->json([
-                'message' => 'Vous n\'êtes pas autorisé à voir les statistiques de cet article',
-            ], 403);
-        }
+        $this->authorize('viewStats', $article);
 
         $stats = $this->articleService->getArticleStats($article);
 
@@ -435,7 +401,7 @@ class ArticleController extends Controller
     }
 
     /**
-     * Bulk publish articles.
+     * Import/export & helpers
      */
     public function bulkPublish(Request $request): JsonResponse
     {
@@ -446,17 +412,14 @@ class ArticleController extends Controller
 
         $articles = Article::whereIn('id', $data['ids'])->get();
         foreach ($articles as $article) {
-            if (Auth::user()->can('publish', $article)) {
-                $this->articleService->publishArticle($article, Auth::user());
+            if ($request->user()->can('publish', $article)) {
+                $this->articleService->publishArticle($article, $request->user());
             }
         }
 
         return response()->json(['message' => 'Articles publiés']);
     }
 
-    /**
-     * Bulk unpublish articles.
-     */
     public function bulkUnpublish(Request $request): JsonResponse
     {
         $data = $request->validate([
@@ -466,17 +429,14 @@ class ArticleController extends Controller
 
         $articles = Article::whereIn('id', $data['ids'])->get();
         foreach ($articles as $article) {
-            if (Auth::user()->can('publish', $article)) {
-                $this->articleService->unpublishArticle($article, Auth::user());
+            if ($request->user()->can('publish', $article)) {
+                $this->articleService->unpublishArticle($article, $request->user());
             }
         }
 
         return response()->json(['message' => 'Articles dépubliés']);
     }
 
-    /**
-     * Bulk archive (soft-delete) articles.
-     */
     public function bulkArchive(Request $request): JsonResponse
     {
         $data = $request->validate([
@@ -486,7 +446,7 @@ class ArticleController extends Controller
 
         $articles = Article::whereIn('id', $data['ids'])->get();
         foreach ($articles as $article) {
-            if (Auth::user()->can('delete', $article)) {
+            if ($request->user()->can('delete', $article)) {
                 $article->delete();
             }
         }
@@ -494,9 +454,6 @@ class ArticleController extends Controller
         return response()->json(['message' => 'Articles archivés']);
     }
 
-    /**
-     * Bulk delete articles.
-     */
     public function bulkDelete(Request $request): JsonResponse
     {
         $data = $request->validate([
@@ -508,7 +465,7 @@ class ArticleController extends Controller
         $force = (bool) ($data['force'] ?? false);
         $articles = Article::withTrashed()->whereIn('id', $data['ids'])->get();
         foreach ($articles as $article) {
-            if (Auth::user()->can('delete', $article)) {
+            if ($request->user()->can('delete', $article)) {
                 $force ? $article->forceDelete() : $article->delete();
             }
         }
@@ -516,9 +473,6 @@ class ArticleController extends Controller
         return response()->json(['message' => $force ? 'Articles supprimés définitivement' : 'Articles supprimés']);
     }
 
-    /**
-     * Bulk move to category.
-     */
     public function bulkMoveCategory(Request $request): JsonResponse
     {
         $data = $request->validate([
@@ -529,7 +483,7 @@ class ArticleController extends Controller
 
         $articles = Article::whereIn('id', $data['ids'])->get();
         foreach ($articles as $article) {
-            if (!Auth::user()->can('update', $article)) {
+            if (!$request->user()->can('update', $article)) {
                 continue;
             }
             $existing = $article->categories()->pluck('categories.id')->toArray();
@@ -541,9 +495,6 @@ class ArticleController extends Controller
         return response()->json(['message' => 'Articles déplacés de catégorie']);
     }
 
-    /**
-     * Bulk add tags.
-     */
     public function bulkAddTags(Request $request): JsonResponse
     {
         $data = $request->validate([
@@ -555,18 +506,17 @@ class ArticleController extends Controller
 
         $articles = Article::whereIn('id', $data['ids'])->get();
         foreach ($articles as $article) {
-            if (!Auth::user()->can('update', $article)) {
+            if (!$request->user()->can('update', $article)) {
                 continue;
             }
-            $article->tags()->syncWithoutDetaching(collect($data['tags'])->mapWithKeys(fn ($id) => [(int) $id => ['sort_order' => 0]])->toArray());
+            $article->tags()->syncWithoutDetaching(collect($data['tags'])->mapWithKeys(
+                fn ($id) => [(int) $id => ['sort_order' => 0]]
+            )->toArray());
         }
 
         return response()->json(['message' => 'Tags ajoutés']);
     }
 
-    /**
-     * Bulk remove tags.
-     */
     public function bulkRemoveTags(Request $request): JsonResponse
     {
         $data = $request->validate([
@@ -578,7 +528,7 @@ class ArticleController extends Controller
 
         $articles = Article::whereIn('id', $data['ids'])->get();
         foreach ($articles as $article) {
-            if (!Auth::user()->can('update', $article)) {
+            if (!$request->user()->can('update', $article)) {
                 continue;
             }
             $article->tags()->detach($data['tags']);
@@ -587,9 +537,6 @@ class ArticleController extends Controller
         return response()->json(['message' => 'Tags retirés']);
     }
 
-    /**
-     * Import articles from JSON payload (simple placeholder, expand per need).
-     */
     public function import(Request $request): JsonResponse
     {
         $data = $request->validate([
@@ -600,24 +547,20 @@ class ArticleController extends Controller
 
         $created = [];
         foreach ($data['items'] as $item) {
-            $created[] = $this->articleService->createArticle($item, Auth::user());
+            if ($request->user()->can('create', Article::class)) {
+                $created[] = $this->articleService->createArticle($item, $request->user());
+            }
         }
 
         return response()->json(['message' => 'Import terminé', 'count' => count($created)]);
     }
 
-    /**
-     * Export articles as JSON.
-     */
     public function export(Request $request): JsonResponse
     {
         $articles = Article::with(['categories', 'tags', 'author'])->get();
         return response()->json(['data' => ArticleResource::collection($articles)]);
     }
 
-    /**
-     * Provide an import template.
-     */
     public function downloadTemplate(): JsonResponse
     {
         return response()->json([
@@ -629,9 +572,6 @@ class ArticleController extends Controller
         ]);
     }
 
-    /**
-     * Search suggestions.
-     */
     public function searchSuggestions(Request $request): JsonResponse
     {
         $q = (string) $request->validate(['q' => ['nullable', 'string']])['q'] ?? '';
@@ -639,9 +579,6 @@ class ArticleController extends Controller
         return response()->json(['data' => $titles]);
     }
 
-    /**
-     * Autocomplete results.
-     */
     public function autocomplete(Request $request): JsonResponse
     {
         $q = (string) $request->validate(['q' => ['nullable', 'string']])['q'] ?? '';
@@ -649,18 +586,12 @@ class ArticleController extends Controller
         return response()->json(['data' => $articles]);
     }
 
-    /**
-     * robots.txt proxy.
-     */
     public function robots(): \Illuminate\Http\Response
     {
         $content = "User-agent: *\nAllow: /\n";
         return response($content, 200, ['Content-Type' => 'text/plain']);
     }
 
-    /**
-     * SEO meta for a single article.
-     */
     public function metaTags(Article $article): JsonResponse
     {
         return response()->json([
@@ -670,51 +601,25 @@ class ArticleController extends Controller
         ]);
     }
 
-    /**
-     * Preview article (auth required).
-     */
     public function preview(Article $article): JsonResponse
     {
-        if (!Auth::check() || !Auth::user()->can('view', $article)) {
-            return response()->json(['message' => 'Non autorisé'], 403);
-        }
-        return response()->json(['data' => new ArticleResource($article->load(['categories', 'tags', 'author']))]);
+        // Autorisation standard (évite le rouge sur Auth::user()->can)
+        $this->authorize('view', $article);
+
+        return response()->json([
+            'data' => new ArticleResource($article->load(['categories', 'tags', 'author'])),
+        ]);
     }
 
-    /**
-     * Generate preview token (placeholder, store in cache for 15 min).
-     */
     public function generatePreviewToken(Article $article): JsonResponse
     {
-        if (!Auth::check() || !Auth::user()->can('update', $article)) {
-            return response()->json(['message' => 'Non autorisé'], 403);
-        }
+        $this->authorize('update', $article);
+
         $token = bin2hex(random_bytes(16));
         CacheFacade::put('preview_'.$article->id.'_'.$token, true, 900);
         return response()->json(['token' => $token]);
     }
 
-    /**
-     * Webhook endpoints.
-     */
-    public function webhookPublished(Request $request): JsonResponse
-    {
-        return response()->json(['message' => 'Webhook reçu (published)']);
-    }
-
-    public function webhookUpdated(Request $request): JsonResponse
-    {
-        return response()->json(['message' => 'Webhook reçu (updated)']);
-    }
-
-    public function webhookDeleted(Request $request): JsonResponse
-    {
-        return response()->json(['message' => 'Webhook reçu (deleted)']);
-    }
-
-    /**
-     * Health endpoints.
-     */
     public function health(): JsonResponse
     {
         return response()->json(['status' => 'ok']);

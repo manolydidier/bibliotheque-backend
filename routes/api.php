@@ -40,7 +40,7 @@ Route::get('/validate-unique', [AuthController::class, 'validateUnique']);
 
 
 
-    Route::post('/logout', [AuthController::class, 'logout'])->middleware('auth:sanctum')->middleware('auth:sanctum');
+    Route::post('/logout', [AuthController::class, 'logout'])->middleware('auth:sanctum');
     Route::post('/user/{id}/avatar', [AuthController::class, 'updateAvatar'])->middleware('auth:sanctum');
     Route::post('/auth/{id}/updatepassword', [AuthController::class, 'updatePassword'])->middleware('auth:sanctum');
     Route::get('/user/{id}/profile', [AuthController::class, 'showProfile'])->middleware('auth:sanctum');
@@ -108,44 +108,42 @@ Route::get('/auth/google/callback', [AuthController::class, 'googleCallback'])
         Route::post('/email/verification/request', [EmailVerificationController::class, 'requestCode']);
         Route::post('/email/verification/confirm', [EmailVerificationController::class, 'confirm']);
 
-    // Route::prefix('auth/password')->group(function () {
-    // Route::post('/forgot', [PasswordController::class, 'sendResetLink'])->middleware('throttle:10,1');
-    // Route::post('/reset',  [PasswordController::class, 'reset'])->middleware('throttle:10,1');
-    //     });
+  ;
 
-Route::post('auth/password/forgot', [PasswordController::class, 'forgot']);
-Route::post('auth/password/reset',  [PasswordController::class, 'reset']);
+Route::post('auth/password/forgot', [PasswordController::class, 'forgot'])->middleware('throttle:10,1');
+Route::post('auth/password/reset',  [PasswordController::class, 'reset'])->middleware('throttle:10,1');
+
 // ========================================
 // MODULE ARTICLES - API ROUTES
 // ========================================
 
-// use App\Http\Controllers\Api\ArticleController;
-// use App\Http\Controllers\Api\CategoryController;
-// use App\Http\Controllers\Api\TagController;
-// use App\Http\Controllers\Api\MediaController;
-// use App\Http\Controllers\Api\CommentController;
-// use App\Http\Controllers\Api\ShareController;
-// use App\Http\Controllers\Api\RatingController;
-// use App\Http\Controllers\Api\AnalyticsController;
+use App\Http\Controllers\Api\ArticleController;
+use App\Http\Controllers\Api\CategoryController;
+use App\Http\Controllers\Api\TagController;
+use App\Http\Controllers\Api\MediaController;
+use App\Http\Controllers\Api\CommentController;
+use App\Http\Controllers\Api\ShareController;
+use App\Http\Controllers\Api\RatingController;
+use App\Http\Controllers\Api\AnalyticsController;
 
-// // Articles - Public routes
-// Route::prefix('articles')->name('articles.')->group(function () {
-//     Route::get('/', [ArticleController::class, 'index'])->name('index');
-//     Route::get('/search', [ArticleController::class, 'search'])->name('search');
-//     Route::get('/{slug}', [ArticleController::class, 'show'])->name('show');
-// });
+// Articles - Public routes
+Route::prefix('articles')->name('articles.')->group(function () {
+    Route::get('/', [ArticleController::class, 'index'])->name('index');
+    Route::get('/search', [ArticleController::class, 'search'])->name('search');
+    Route::get('/{slug}', [ArticleController::class, 'show'])->name('show');
+});
 
-// // Articles - Protected routes
-// Route::middleware('auth:sanctum')->prefix('articles')->name('articles.')->group(function () {
-//     Route::post('/', [ArticleController::class, 'store'])->name('store');
-//     Route::put('/{article}', [ArticleController::class, 'update'])->name('update');
-//     Route::delete('/{article}', [ArticleController::class, 'destroy'])->name('destroy');
-//     Route::post('/{article}/publish', [ArticleController::class, 'publish'])->name('publish');
-//     Route::post('/{article}/unpublish', [ArticleController::class, 'unpublish'])->name('unpublish');
-//     Route::post('/{article}/duplicate', [ArticleController::class, 'duplicate'])->name('duplicate');
-//     Route::post('/{article}/toggle-featured', [ArticleController::class, 'toggleFeatured'])->name('toggle-featured');
-//     Route::get('/{article}/stats', [ArticleController::class, 'stats'])->name('stats');
-// });
+// Articles - Protected routes
+Route::middleware('auth:sanctum')->prefix('articles')->name('articles.')->group(function () {
+    Route::post('/', [ArticleController::class, 'store'])->name('store');
+    Route::put('/{article}', [ArticleController::class, 'update'])->name('update');
+    Route::delete('/{article}', [ArticleController::class, 'destroy'])->name('destroy');
+    Route::post('/{article}/publish', [ArticleController::class, 'publish'])->name('publish');
+    Route::post('/{article}/unpublish', [ArticleController::class, 'unpublish'])->name('unpublish');
+    Route::post('/{article}/duplicate', [ArticleController::class, 'duplicate'])->name('duplicate');
+    Route::post('/{article}/toggle-featured', [ArticleController::class, 'toggleFeatured'])->name('toggle-featured');
+    Route::get('/{article}/stats', [ArticleController::class, 'stats'])->name('stats');
+});
 
 // // Categories
 // Route::prefix('categories')->name('categories.')->group(function () {

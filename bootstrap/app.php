@@ -21,6 +21,8 @@ return Application::configure(basePath: dirname(__DIR__))
         // Si tu as un middleware perso, donne-lui un alias séparé :
         $middleware->alias([
             'custom.auth' => CustomAuthenticate::class,
+            'can' => \Illuminate\Auth\Middleware\Authorize::class,
+            'throttle' => \Illuminate\Routing\Middleware\ThrottleRequests::class,
         ]);
 
         // Si tu DOIS remplacer "auth", assure-toi que ton CustomAuthenticate

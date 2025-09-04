@@ -16,11 +16,15 @@ class DatabaseSeeder extends Seeder
         // User::factory(10)->create();
 
         $this->call([
-        RolesTableSeeder::class,
-        UsersTableSeeder::class,
-        UserRolesTableSeeder::class,   
-        PermissionsTableSeeder::class, // déjà exécuté mais tu peux le laisser
-        RolePermissionsTableSeeder::class,
+        // RolesTableSeeder::class,
+        // UsersTableSeeder::class,
+        // UserRolesTableSeeder::class,   
+        // PermissionsTableSeeder::class, // déjà exécuté mais tu peux le laisser
+        // RolePermissionsTableSeeder::class,
+
+          CategorySeeder::class,
+            TagSeeder::class,
+            ArticleSeeder::class,
     ]);
 
 

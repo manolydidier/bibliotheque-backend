@@ -179,7 +179,7 @@ class ArticleSeeder extends Seeder
     /**
      * Create articles with different states and relationships.
      */
-    private function createArticles(array $users, array $categories, array $tags): void
+    private function createArticles(\Illuminate\Support\Collection $users, array $categories, array $tags): void
     {
         // Featured articles
         $this->createFeaturedArticles($users, $categories, $tags);
@@ -203,7 +203,7 @@ class ArticleSeeder extends Seeder
     /**
      * Create featured articles.
      */
-    private function createFeaturedArticles(array $users, array $categories, array $tags): void
+    private function createFeaturedArticles(\Illuminate\Support\Collection $users, array $categories, array $tags): void
     {
         $featuredTitles = [
             'L\'avenir de l\'Intelligence Artificielle en 2024',
@@ -240,7 +240,7 @@ class ArticleSeeder extends Seeder
     /**
      * Create regular published articles.
      */
-    private function createRegularArticles(array $users, array $categories, array $tags): void
+    private function createRegularArticles(\Illuminate\Support\Collection $users, array $categories, array $tags): void
     {
         Article::factory()
             ->count(20)
@@ -266,7 +266,7 @@ class ArticleSeeder extends Seeder
     /**
      * Create draft articles.
      */
-    private function createDraftArticles(array $users, array $categories, array $tags): void
+    private function createDraftArticles(\Illuminate\Support\Collection $users, array $categories, array $tags): void
     {
         Article::factory()
             ->count(10)
@@ -292,7 +292,7 @@ class ArticleSeeder extends Seeder
     /**
      * Create pending articles.
      */
-    private function createPendingArticles(array $users, array $categories, array $tags): void
+    private function createPendingArticles(\Illuminate\Support\Collection $users, array $categories, array $tags): void
     {
         Article::factory()
             ->count(8)
@@ -318,7 +318,7 @@ class ArticleSeeder extends Seeder
     /**
      * Create scheduled articles.
      */
-    private function createScheduledArticles(array $users, array $categories, array $tags): void
+    private function createScheduledArticles(\Illuminate\Support\Collection $users, array $categories, array $tags): void
     {
         Article::factory()
             ->count(5)
@@ -344,7 +344,7 @@ class ArticleSeeder extends Seeder
     /**
      * Create archived articles.
      */
-    private function createArchivedArticles(array $users, array $categories, array $tags): void
+    private function createArchivedArticles(\Illuminate\Support\Collection $users, array $categories, array $tags): void
     {
         Article::factory()
             ->count(5)
