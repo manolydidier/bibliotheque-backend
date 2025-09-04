@@ -123,8 +123,7 @@ Route::post('auth/password/reset',  [PasswordController::class, 'reset']);
 // ========================================
 
 use App\Http\Controllers\Api\ArticleController;
-use App\Http\Controllers\Api\CategoryController;
-use App\Http\Controllers\Api\TagController;
+
 use App\Http\Controllers\Api\MediaController;
 use App\Http\Controllers\Api\CommentController;
 use App\Http\Controllers\Api\ShareController;
