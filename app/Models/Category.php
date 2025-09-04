@@ -15,9 +15,10 @@ use Illuminate\Support\Str;
 
 class Category extends Model
 {
-    use HasFactory, SoftDeletes, HasUuids;
+    use HasFactory, SoftDeletes;
 
     protected $fillable = [
+        'uuid',
         'tenant_id',
         'parent_id',
         'name',
@@ -104,16 +105,16 @@ class Category extends Model
     protected function slug(): Attribute
     {
         return Attribute::make(
-            get: fn (string $value) => $value,
-            set: fn (string $value) => Str::slug($value),
+            get: fn ($value) => $value,
+            set: fn ($value) => Str::slug($value),
         );
     }
 
     protected function name(): Attribute
     {
         return Attribute::make(
-            get: fn (string $value) => $value,
-            set: fn (string $value) => ucfirst(trim($value)),
+            get: fn ($value) => $value,
+            set: fn ($value) => ucfirst(trim($value)),
         );
     }
 
@@ -168,6 +169,11 @@ class Category extends Model
     protected static function booted(): void
     {
         static::creating(function (Category $category) {
+
+            if (empty($category->uuid)) {
+                $category->uuid = Str::uuid()->toString();
+            }
+
             if (empty($category->slug)) {
                 $category->slug = Str::slug($category->name);
             }

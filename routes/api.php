@@ -14,6 +14,9 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\UserRolePermissionController;
 
+use App\Http\Controllers\Api\TagController;
+use App\Http\Controllers\Api\CategoryController;
+
 use Illuminate\Support\Facades\Log;
 
 
@@ -108,11 +111,13 @@ Route::get('/auth/google/callback', [AuthController::class, 'googleCallback'])
         Route::post('/email/verification/request', [EmailVerificationController::class, 'requestCode']);
         Route::post('/email/verification/confirm', [EmailVerificationController::class, 'confirm']);
 
-  ;
+    // Route::prefix('auth/password')->group(function () {
+    // Route::post('/forgot', [PasswordController::class, 'sendResetLink'])->middleware('throttle:10,1');
+    // Route::post('/reset',  [PasswordController::class, 'reset'])->middleware('throttle:10,1');
+    //     });
 
-Route::post('auth/password/forgot', [PasswordController::class, 'forgot'])->middleware('throttle:10,1');
-Route::post('auth/password/reset',  [PasswordController::class, 'reset'])->middleware('throttle:10,1');
-
+Route::post('auth/password/forgot', [PasswordController::class, 'forgot']);
+Route::post('auth/password/reset',  [PasswordController::class, 'reset']);
 // ========================================
 // MODULE ARTICLES - API ROUTES
 // ========================================
