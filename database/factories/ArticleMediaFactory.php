@@ -5,6 +5,7 @@ namespace Database\Factories;
 use App\Enums\ArticleStatus;
 use App\Enums\ArticleVisibility;
 use App\Models\Article;
+use App\Models\User;
 use Illuminate\Database\Eloquent\Factories\Factory;
 use Illuminate\Support\Str;
 
@@ -17,9 +18,11 @@ class ArticleFactory extends Factory
         $title   = ucfirst($this->faker->unique()->sentence(mt_rand(3, 7)));
         $content = $this->faker->paragraphs(mt_rand(5, 12), true);
 
-        // Calculs robustes
         $wordCount   = str_word_count(strip_tags($content));
         $readingTime = max(1, (int) round($wordCount / 200));
+
+        // Récupère un ID utilisateur existant (ou null si aucun)
+        $pickUserId = fn () => User::inRandomOrder()->value('id');
 
         return [
             'uuid'               => (string) Str::uuid(),
@@ -33,7 +36,6 @@ class ArticleFactory extends Factory
             'featured_image'     => null,
             'featured_image_alt' => null,
 
-            // Laisse vide (array) si tu as des casts ->array dans le modèle
             'meta'               => [],
             'seo_data'           => [],
 
@@ -45,7 +47,6 @@ class ArticleFactory extends Factory
             'scheduled_at'       => null,
             'expires_at'         => null,
 
-            // ✅ plus de NULL ici
             'reading_time'       => $readingTime,
             'word_count'         => $wordCount,
 
@@ -55,36 +56,36 @@ class ArticleFactory extends Factory
             'rating_average'     => $this->faker->randomFloat(2, 0, 5),
             'rating_count'       => $this->faker->numberBetween(0, 200),
 
-            'is_featured'        => false,
+            'is_featured'        => $this->faker->boolean(15),
             'is_sticky'          => $this->faker->boolean(10),
 
             'allow_comments'     => true,
             'allow_sharing'      => true,
             'allow_rating'       => true,
 
-            'author_name'        => null,
-            'author_bio'         => null,
+            'author_name'        => $this->faker->optional(0.3)->name(),
+            'author_bio'         => $this->faker->optional(0.3)->paragraph(2),
             'author_avatar'      => null,
 
-            'author_id'          => null,
-            'created_by'         => null,
-            'updated_by'         => null,
-            'reviewed_by'        => null,
-            'reviewed_at'        => null,
-            'review_notes'       => null,
+            // ✅ utilise des IDs déjà en base, ne crée pas de User()
+            'author_id'          => $pickUserId(),
+            'created_by'         => $pickUserId(),
+            'updated_by'         => $pickUserId(),
+            'reviewed_by'        => $this->faker->optional(0.4)->randomElement([$pickUserId(), null]),
+            'reviewed_at'        => $this->faker->optional(0.4)->dateTimeBetween('-1 month', 'now'),
+            'review_notes'       => $this->faker->optional()->sentence(),
         ];
     }
 
     public function published(): self
     {
-        return $this->state(function () {
-            return [
-                'status'       => ArticleStatus::PUBLISHED,
-                'published_at' => $this->faker->dateTimeBetween('-4 months', 'now'),
-                'scheduled_at' => null,
-                'expires_at'   => null,
-            ];
-        });
+        return $this->state(fn () => [
+            'status'       => ArticleStatus::PUBLISHED,
+            'published_at' => $this->faker->dateTimeBetween('-4 months', 'now'),
+            'scheduled_at' => null,
+            'expires_at'   => null,
+            'visibility'   => ArticleVisibility::PUBLIC,
+        ]);
     }
 
     public function draft(): self
@@ -107,7 +108,6 @@ class ArticleFactory extends Factory
         ]);
     }
 
-    // Alias pratique
     public function scheduled(): self
     {
         return $this->pending();
@@ -119,7 +119,6 @@ class ArticleFactory extends Factory
             'status'       => ArticleStatus::ARCHIVED,
             'published_at' => null,
             'scheduled_at' => null,
-            // parfois archivé après expiration
             'expires_at'   => $this->faker->optional()->dateTimeBetween('-2 months', '-1 day'),
         ]);
     }

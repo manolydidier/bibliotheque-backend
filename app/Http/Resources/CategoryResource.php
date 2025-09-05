@@ -60,40 +60,40 @@ class CategoryResource extends JsonResource
             'deleted_at' => $this->when($this->deleted_at, $this->deleted_at?->toISOString()),
 
             // Liens HATEOAS
-            '_links' => [
-                'self' => [
-                    'href' => route('api.categories.show', $this->uuid),
-                    'method' => 'GET',
-                ],
-                'edit' => $this->when($canManage, [
-                    'href' => route('api.categories.update', $this->uuid),
-                    'method' => 'PUT',
-                ]),
-                'delete' => $this->when($canManage, [
-                    'href' => route('api.categories.destroy', $this->uuid),
-                    'method' => 'DELETE',
-                ]),
-                'toggle_active' => $this->when($canManage, [
-                    'href' => route('api.categories.toggle-active', $this->uuid),
-                    'method' => 'PATCH',
-                ]),
-                'toggle_featured' => $this->when($canManage, [
-                    'href' => route('api.categories.toggle-featured', $this->uuid),
-                    'method' => 'PATCH',
-                ]),
-                'articles' => [
-                    'href' => route('api.categories.articles', $this->uuid),
-                    'method' => 'GET',
-                ],
-                'children' => [
-                    'href' => route('api.categories.children', $this->uuid),
-                    'method' => 'GET',
-                ],
-                'parent' => $this->when($this->parent_id, [
-                    'href' => route('api.categories.show', $this->parent->uuid),
-                    'method' => 'GET',
-                ]),
-            ],
+            // '_links' => [
+            //     'self' => [
+            //         'href' => route('api.categories.show', $this->uuid),
+            //         'method' => 'GET',
+            //     ],
+            //     'edit' => $this->when($canManage, [
+            //         'href' => route('api.categories.update', $this->uuid),
+            //         'method' => 'PUT',
+            //     ]),
+            //     'delete' => $this->when($canManage, [
+            //         'href' => route('api.categories.destroy', $this->uuid),
+            //         'method' => 'DELETE',
+            //     ]),
+            //     'toggle_active' => $this->when($canManage, [
+            //         'href' => route('api.categories.toggle-active', $this->uuid),
+            //         'method' => 'PATCH',
+            //     ]),
+            //     'toggle_featured' => $this->when($canManage, [
+            //         'href' => route('api.categories.toggle-featured', $this->uuid),
+            //         'method' => 'PATCH',
+            //     ]),
+            //     'articles' => [
+            //         'href' => route('api.categories.articles', $this->uuid),
+            //         'method' => 'GET',
+            //     ],
+            //     'children' => [
+            //         'href' => route('api.categories.children', $this->uuid),
+            //         'method' => 'GET',
+            //     ],
+            //     'parent' => $this->when($this->parent_id, [
+            //         'href' => route('api.categories.show', $this->parent->uuid),
+            //         'method' => 'GET',
+            //     ]),
+            // ],
 
             // Actions disponibles
             '_actions' => $this->when($canManage, [

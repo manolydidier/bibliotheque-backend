@@ -116,66 +116,56 @@ Route::get('/auth/google/callback', [AuthController::class, 'googleCallback'])
     // Route::post('/reset',  [PasswordController::class, 'reset'])->middleware('throttle:10,1');
     //     });
 
-Route::post('auth/password/forgot', [PasswordController::class, 'forgot']);
-Route::post('auth/password/reset',  [PasswordController::class, 'reset']);
+Route::post('auth/password/forgot', [PasswordController::class, 'forgot'])->middleware('throttle:10,1');
+Route::post('auth/password/reset',  [PasswordController::class, 'reset'])->middleware('throttle:10,1');
+
 // ========================================
 // MODULE ARTICLES - API ROUTES
 // ========================================
 
 use App\Http\Controllers\Api\ArticleController;
 
-use App\Http\Controllers\Api\MediaController;
-use App\Http\Controllers\Api\CommentController;
-use App\Http\Controllers\Api\ShareController;
-use App\Http\Controllers\Api\RatingController;
-use App\Http\Controllers\Api\AnalyticsController;
+
 
 // Articles - Public routes
-Route::prefix('articles')->name('articles.')->group(function () {
-    Route::get('/', [ArticleController::class, 'index'])->name('index');
-    Route::get('/search', [ArticleController::class, 'search'])->name('search');
-    Route::get('/{slug}', [ArticleController::class, 'show'])->name('show');
+
+
+Route::prefix('articles')->group(function () {
+    // IMPORTANT: routes spécifiques AVANT la route à slug
+    Route::get('/', [ArticleController::class, 'index']);
+    Route::get('/search', [ArticleController::class, 'search']);
+    Route::get('/{article:slug}', [ArticleController::class, 'show']);
 });
 
-// Articles - Protected routes
-Route::middleware('auth:sanctum')->prefix('articles')->name('articles.')->group(function () {
-    Route::post('/', [ArticleController::class, 'store'])->name('store');
-    Route::put('/{article}', [ArticleController::class, 'update'])->name('update');
-    Route::delete('/{article}', [ArticleController::class, 'destroy'])->name('destroy');
-    Route::post('/{article}/publish', [ArticleController::class, 'publish'])->name('publish');
-    Route::post('/{article}/unpublish', [ArticleController::class, 'unpublish'])->name('unpublish');
-    Route::post('/{article}/duplicate', [ArticleController::class, 'duplicate'])->name('duplicate');
-    Route::post('/{article}/toggle-featured', [ArticleController::class, 'toggleFeatured'])->name('toggle-featured');
-    Route::get('/{article}/stats', [ArticleController::class, 'stats'])->name('stats');
-});
 
-// // Categories
-// Route::prefix('categories')->name('categories.')->group(function () {
-//     Route::get('/', [CategoryController::class, 'index'])->name('index');
-//     Route::get('/{category}', [CategoryController::class, 'show'])->name('show');
+
+
+Route::prefix('categories')->name('categories.')->group(function () {
+    Route::get('/', [CategoryController::class, 'index'])->name('index');
+    Route::get('/{category}', [CategoryController::class, 'show'])->name('show');
     
-//     Route::middleware('auth:sanctum')->group(function () {
-//         Route::post('/', [CategoryController::class, 'store'])->name('store');
-//         Route::put('/{category}', [CategoryController::class, 'update'])->name('update');
-//         Route::delete('/{category}', [CategoryController::class, 'destroy'])->name('destroy');
-//         Route::post('/{category}/toggle-active', [CategoryController::class, 'toggleActive'])->name('toggle-active');
-//         Route::post('/{category}/toggle-featured', [CategoryController::class, 'toggleFeatured'])->name('toggle-featured');
-//     });
-// });
+    Route::middleware('auth:sanctum')->group(function () {
+        Route::post('/', [CategoryController::class, 'store'])->name('store');
+        Route::put('/{category}', [CategoryController::class, 'update'])->name('update');
+        Route::delete('/{category}', [CategoryController::class, 'destroy'])->name('destroy');
+        Route::post('/{category}/toggle-active', [CategoryController::class, 'toggleActive'])->name('toggle-active');
+        Route::post('/{category}/toggle-featured', [CategoryController::class, 'toggleFeatured'])->name('toggle-featured');
+    });
+});
 
 // // Tags
-// Route::prefix('tags')->name('tags.')->group(function () {
-//     Route::get('/', [TagController::class, 'index'])->name('index');
-//     Route::get('/popular', [TagController::class, 'popular'])->name('popular');
-//     Route::get('/{tag}', [TagController::class, 'show'])->name('show');
+Route::prefix('tags')->name('tags.')->group(function () {
+    Route::get('/', [TagController::class, 'index'])->name('index');
+    Route::get('/popular', [TagController::class, 'popular'])->name('popular');
+    Route::get('/{tag}', [TagController::class, 'show'])->name('show');
     
-//     Route::middleware('auth:sanctum')->group(function () {
-//         Route::post('/', [TagController::class, 'store'])->name('store');
-//         Route::put('/{tag}', [TagController::class, 'update'])->name('update');
-//         Route::delete('/{tag}', [TagController::class, 'destroy'])->name('destroy');
-//         Route::post('/{tag}/toggle-active', [TagController::class, 'toggleActive'])->name('toggle-active');
-//     });
-// });
+    Route::middleware('auth:sanctum')->group(function () {
+        Route::post('/', [TagController::class, 'store'])->name('store');
+        Route::put('/{tag}', [TagController::class, 'update'])->name('update');
+        Route::delete('/{tag}', [TagController::class, 'destroy'])->name('destroy');
+        Route::post('/{tag}/toggle-active', [TagController::class, 'toggleActive'])->name('toggle-active');
+    });
+});
 
 // // Media
 // Route::middleware('auth:sanctum')->prefix('media')->name('media.')->group(function () {
