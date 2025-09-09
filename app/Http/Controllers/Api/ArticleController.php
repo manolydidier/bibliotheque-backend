@@ -3,741 +3,423 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
-use App\Http\Requests\StoreArticleRequest;
-use App\Http\Requests\UpdateArticleRequest;
-use App\Http\Resources\ArticleResource;
-use App\Http\Resources\ArticleCollection;
-use App\Models\Article;
-use App\Services\ArticleService;
-use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
-use Illuminate\Support\Facades\Auth;
-use Illuminate\Support\Facades\Cache;
-use Illuminate\Support\Facades\DB;
-use Illuminate\Validation\ValidationException;
-use Illuminate\Support\Facades\Cache as CacheFacade;
-use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Http\JsonResponse;
+use App\Models\Article;
+use Illuminate\Support\Facades\DB;          // ✅ CORRECT
+use Illuminate\Support\Facades\Schema;     // (pour sécuriser les facettes)
 
 class ArticleController extends Controller
 {
-    public function __construct(
-        private readonly ArticleService $articleService
-    ) {
-        $this->middleware('auth:sanctum')->except(['index', 'show', 'search']);
-        $this->middleware('throttle:60,1')->only(['store', 'update', 'destroy']);
-    }
-
-    /**
-     * Display a listing of articles with advanced filtering and pagination.
-     */
-    public function index(Request $request): AnonymousResourceCollection
+    public function index(Request $request): JsonResponse
     {
-        $request->validate([
-            'page' => 'nullable|integer|min:1',
-            'per_page' => 'nullable|integer|min:1|max:100',
-            'search' => 'nullable|string|max:255',
-            'category_id' => 'nullable|integer|exists:categories,id',
-            'tag_id' => 'nullable|integer|exists:tags,id',
-            'author_id' => 'nullable|integer|exists:users,id',
-            'status' => 'nullable|string|in:draft,pending,published,archived',
-            'featured' => 'nullable|boolean',
-            'sticky' => 'nullable|boolean',
-            'sort_by' => 'nullable|string|in:created_at,updated_at,published_at,title,view_count,rating_average',
+        // --- Validation souple (IDs CSV ou tableaux) ---
+        $validated = $request->validate([
+            'page'           => 'nullable|integer|min:1',
+            'per_page'       => 'nullable|integer|min:1|max:100',
+            'search'         => 'nullable|string|max:255',
+
+            // Filtres par IDs ou noms/slugs (CSV)
+            'category_ids'   => 'nullable|string',
+            'categories'     => 'nullable|string',
+            'category_slugs' => 'nullable|string',
+
+            'tag_ids'        => 'nullable|string',
+            'tags'           => 'nullable|string',
+            'tag_slugs'      => 'nullable|string',
+
+            'author_id'      => 'nullable|integer|exists:users,id',
+            'author_ids'     => 'nullable|string',
+
+            'status'         => 'nullable|string|in:draft,pending,published,archived',
+            'featured'       => 'nullable|boolean',
+            'sticky'         => 'nullable|boolean',
+
+            'date_from'      => 'nullable|date',
+            'date_to'        => 'nullable|date',
+
+            'rating_min'     => 'nullable|numeric|min:0|max:5',
+            'rating_max'     => 'nullable|numeric|min:0|max:5',
+
+            // Tri (multi-colonnes)
+            'sort'           => 'nullable|string', // ex: "published_at,desc;view_count,desc"
+            'sort_by'        => 'nullable|string|in:created_at,updated_at,published_at,title,view_count,rating_average',
             'sort_direction' => 'nullable|string|in:asc,desc',
-            'include' => 'nullable|string',
-            'fields' => 'nullable|string',
+
+            // Sélection & relations
+            'include'        => 'nullable|string',
+            'fields'         => 'nullable|string',
+
+            // Facettes
+            'include_facets' => 'nullable|boolean',
+            'facet_fields'   => 'nullable|string',
         ]);
 
-        $cacheKey = 'articles_' . md5(serialize($request->all()));
-        
-        return Cache::remember($cacheKey, 300, function () use ($request) {
-            $query = Article::query()
-                ->with(['categories', 'tags', 'author', 'media'])
-                ->withCount(['comments', 'ratings', 'shares'])
-                ->withAvg('ratings', 'rating');
+        // --- Helpers ---
+        $csv = fn($v) => collect(is_array($v) ? $v : explode(',', (string)$v))
+            ->map(fn($x) => trim((string)$x))
+            ->filter()
+            ->values();
 
-            // Apply filters
-            if ($request->filled('search')) {
-                $query->search($request->search);
-            }
+        $toInts = fn($c) => $c->map(fn($x) => (int)$x)->filter()->values();
 
-            if ($request->filled('category_id')) {
-                $query->byCategory($request->category_id);
-            }
+        $articleTable = (new Article())->getTable();
 
-            if ($request->filled('tag_id')) {
-                $query->byTag($request->tag_id);
-            }
+        $allowedColumns = [
+            'id','tenant_id','title','slug','excerpt','content',
+            'featured_image','featured_image_alt','meta','seo_data',
+            'status','visibility','password',
+            'published_at','scheduled_at','expires_at',
+            'reading_time','word_count','view_count','share_count','comment_count',
+            'rating_average','rating_count',
+            'is_featured','is_sticky','allow_comments','allow_sharing','allow_rating',
+            'author_name','author_bio','author_avatar','author_id',
+            'created_by','updated_by','reviewed_by','reviewed_at','review_notes',
+            'created_at','updated_at','deleted_at',
+        ];
 
-            if ($request->filled('author_id')) {
-                $query->byAuthor($request->author_id);
-            }
-
-            if ($request->filled('status')) {
-                $query->where('status', $request->status);
-            } else {
-                // Default to published articles for public access
-                $query->published()->public();
-            }
-
-            if ($request->boolean('featured')) {
-                $query->featured();
-            }
-
-            if ($request->boolean('sticky')) {
-                $query->sticky();
-            }
-
-            // Apply sorting
-            $sortBy = $request->get('sort_by', 'published_at');
-            $sortDirection = $request->get('sort_direction', 'desc');
-            
-            if ($sortBy === 'published_at') {
-                $query->orderBy('is_sticky', 'desc')
-                      ->orderBy('is_featured', 'desc')
-                      ->orderBy('published_at', $sortDirection);
-            } else {
-                $query->orderBy($sortBy, $sortDirection);
-            }
-
-            // Apply tenant filtering if needed
-            if (Auth::check() && Auth::user()->tenant_id) {
-                $query->byTenant(Auth::user()->tenant_id);
-            }
-
-            $perPage = $request->get('per_page', 15);
-            $articles = $query->paginate($perPage);
-
-            return ArticleCollection::make($articles);
-        });
-    }
-
-    /**
-     * Store a newly created article.
-     */
-    public function store(StoreArticleRequest $request): JsonResponse
-    {
-        try {
-            DB::beginTransaction();
-
-            $article = $this->articleService->createArticle($request->validated(), Auth::user());
-
-            DB::commit();
-
-            return response()->json([
-                'message' => 'Article créé avec succès',
-                'data' => new ArticleResource($article->load(['categories', 'tags', 'author'])),
-            ], 201);
-
-        } catch (\Exception $e) {
-            DB::rollBack();
-            
-            return response()->json([
-                'message' => 'Erreur lors de la création de l\'article',
-                'error' => config('app.debug') ? $e->getMessage() : 'Une erreur est survenue',
-            ], 500);
-        }
-    }
-
-    /**
-     * Display the specified article.
-     */
-    public function show(Request $request, string $slug): JsonResponse
-    {
-        $article = Article::where('slug', $slug)
-            ->with(['categories', 'tags', 'author', 'media', 'approvedComments.user'])
-            ->withCount(['comments', 'ratings', 'shares'])
-            ->withAvg('ratings', 'rating')
-            ->firstOrFail();
-
-        // Check if user can view this article
-        if (!$article->canBeViewedBy(Auth::user())) {
-            return response()->json([
-                'message' => 'Accès non autorisé à cet article',
-            ], 403);
+        // Sélection des colonnes
+        $select = $allowedColumns;
+        if (!empty($validated['fields'])) {
+            $requested = $csv($validated['fields'])->all();
+            $sel = array_values(array_intersect($allowedColumns, $requested));
+            if ($sel) $select = $sel;
         }
 
-        // Increment view count (with rate limiting)
-        $cacheKey = "article_view_{$article->id}_" . ($request->ip() ?? 'unknown');
-        if (!Cache::has($cacheKey)) {
-            $article->incrementViewCount();
-            Cache::put($cacheKey, true, 3600); // 1 hour
+        // Relations autorisées
+        $relationsAllowed = [
+            'categories','tags','media','comments','approvedComments','ratings','shares','history',
+            'author','createdBy','updatedBy','reviewedBy',
+        ];
+        $includes = $relationsAllowed;
+        if (!empty($validated['include'])) {
+            $asked    = $csv($validated['include'])->all();
+            $inc      = array_values(array_intersect($relationsAllowed, $asked));
+            if ($inc) $includes = $inc;
         }
 
-        return response()->json([
-            'data' => new ArticleResource($article),
-        ]);
-    }
-
-    /**
-     * Update the specified article.
-     */
-    public function update(UpdateArticleRequest $request, Article $article): JsonResponse
-    {
-        // Check permissions
-        if (!Auth::user()->can('update', $article)) {
-            return response()->json([
-                'message' => 'Vous n\'êtes pas autorisé à modifier cet article',
-            ], 403);
-        }
-
-        try {
-            DB::beginTransaction();
-
-            $updatedArticle = $this->articleService->updateArticle($article, $request->validated(), Auth::user());
-
-            DB::commit();
-
-            return response()->json([
-                'message' => 'Article mis à jour avec succès',
-                'data' => new ArticleResource($updatedArticle->load(['categories', 'tags', 'author'])),
-            ]);
-
-        } catch (\Exception $e) {
-            DB::rollBack();
-            
-            return response()->json([
-                'message' => 'Erreur lors de la mise à jour de l\'article',
-                'error' => config('app.debug') ? $e->getMessage() : 'Une erreur est survenue',
-            ], 500);
-        }
-    }
-
-    /**
-     * Remove the specified article.
-     */
-    public function destroy(Article $article): JsonResponse
-    {
-        // Check permissions
-        if (!Auth::user()->can('delete', $article)) {
-            return response()->json([
-                'message' => 'Vous n\'êtes pas autorisé à supprimer cet article',
-            ], 403);
-        }
-
-        try {
-            DB::beginTransaction();
-
-            $this->articleService->deleteArticle($article);
-
-            DB::commit();
-
-            return response()->json([
-                'message' => 'Article supprimé avec succès',
-            ]);
-
-        } catch (\Exception $e) {
-            DB::rollBack();
-            
-            return response()->json([
-                'message' => 'Erreur lors de la suppression de l\'article',
-                'error' => config('app.debug') ? $e->getMessage() : 'Une erreur est survenue',
-            ], 500);
-        }
-    }
-
-    /**
-     * Search articles with advanced filters.
-     */
-    public function search(Request $request): AnonymousResourceCollection
-    {
-        $request->validate([
-            'q' => 'required|string|min:2|max:255',
-            'page' => 'nullable|integer|min:1',
-            'per_page' => 'nullable|integer|min:1|max:50',
-            'filters' => 'nullable|array',
-        ]);
-
-        $query = Article::query()
-            ->published()
-            ->public()
-            ->with(['categories', 'tags', 'author'])
-            ->withCount(['comments', 'ratings', 'shares'])
+        // --- Base query ---
+        $base = Article::query()
+            ->from($articleTable)
+            ->select($select)
+            ->with($includes)
+            ->withCount(['comments','approvedComments','ratings','shares','history','media','tags','categories'])
             ->withAvg('ratings', 'rating');
 
-        // Apply search
-        $query->search($request->q);
-
-        // Apply additional filters
-        if ($request->filled('filters')) {
-            $this->applySearchFilters($query, $request->filters);
+        // Texte libre
+        if (!empty($validated['search'])) {
+            $s = $validated['search'];
+            $base->where(function ($q) use ($s, $articleTable) {
+                $q->where($articleTable.'.title', 'like', "%{$s}%")
+                  ->orWhere($articleTable.'.excerpt', 'like', "%{$s}%")
+                  ->orWhere($articleTable.'.content', 'like', "%{$s}%");
+            });
         }
 
-        $perPage = $request->get('per_page', 20);
-        $articles = $query->ordered()->paginate($perPage);
-
-        return ArticleCollection::make($articles);
-    }
-
-    /**
-     * Publish an article.
-     */
-    public function publish(Article $article): JsonResponse
-    {
-        if (!Auth::user()->can('publish', $article)) {
-            return response()->json([
-                'message' => 'Vous n\'êtes pas autorisé à publier cet article',
-            ], 403);
+        // Statut par défaut : publiés & non expirés
+        if (!empty($validated['status'])) {
+            $base->where($articleTable.'.status', $validated['status']);
+        } else {
+            $base->where($articleTable.'.status', 'published')
+                 ->whereNotNull($articleTable.'.published_at')
+                 ->where($articleTable.'.published_at', '<=', now())
+                 ->where(function ($q) use ($articleTable) {
+                     $q->whereNull($articleTable.'.expires_at')
+                       ->orWhere($articleTable.'.expires_at', '>', now());
+                 });
         }
 
-        try {
-            $this->articleService->publishArticle($article, Auth::user());
-
-            return response()->json([
-                'message' => 'Article publié avec succès',
-                'data' => new ArticleResource($article->load(['categories', 'tags', 'author'])),
-            ]);
-
-        } catch (\Exception $e) {
-            return response()->json([
-                'message' => 'Erreur lors de la publication de l\'article',
-                'error' => config('app.debug') ? $e->getMessage() : 'Une erreur est survenue',
-            ], 500);
+        // Dates
+        if (!empty($validated['date_from'])) {
+            $base->where($articleTable.'.published_at','>=',$validated['date_from']);
         }
-    }
-
-    /**
-     * Unpublish an article.
-     */
-    public function unpublish(Article $article): JsonResponse
-    {
-        if (!Auth::user()->can('publish', $article)) {
-            return response()->json([
-                'message' => 'Vous n\'êtes pas autorisé à dépublier cet article',
-            ], 403);
+        if (!empty($validated['date_to'])) {
+            $base->where($articleTable.'.published_at','<=',$validated['date_to']);
         }
 
-        try {
-            $this->articleService->unpublishArticle($article, Auth::user());
-
-            return response()->json([
-                'message' => 'Article dépublié avec succès',
-                'data' => new ArticleResource($article->load(['categories', 'tags', 'author'])),
-            ]);
-
-        } catch (\Exception $e) {
-            return response()->json([
-                'message' => 'Erreur lors de la dépublication de l\'article',
-                'error' => config('app.debug') ? $e->getMessage() : 'Une erreur est survenue',
-            ], 500);
+        // Rating
+        if (isset($validated['rating_min'])) {
+            $base->where($articleTable.'.rating_average','>=',(float)$validated['rating_min']);
         }
-    }
-
-    /**
-     * Duplicate an article.
-     */
-    public function duplicate(Article $article): JsonResponse
-    {
-        if (!Auth::user()->can('create', Article::class)) {
-            return response()->json([
-                'message' => 'Vous n\'êtes pas autorisé à créer des articles',
-            ], 403);
+        if (isset($validated['rating_max'])) {
+            $base->where($articleTable.'.rating_average','<=',(float)$validated['rating_max']);
         }
 
-        try {
-            DB::beginTransaction();
-
-            $duplicatedArticle = $this->articleService->duplicateArticle($article, Auth::user());
-
-            DB::commit();
-
-            return response()->json([
-                'message' => 'Article dupliqué avec succès',
-                'data' => new ArticleResource($duplicatedArticle->load(['categories', 'tags', 'author'])),
-            ], 201);
-
-        } catch (\Exception $e) {
-            DB::rollBack();
-            
-            return response()->json([
-                'message' => 'Erreur lors de la duplication de l\'article',
-                'error' => config('app.debug') ? $e->getMessage() : 'Une erreur est survenue',
-            ], 500);
+        // Flags
+        if (array_key_exists('featured', $validated) && $request->boolean('featured')) {
+            $base->where($articleTable.'.is_featured', true);
         }
-    }
-
-    /**
-     * Toggle featured status of an article.
-     */
-    public function toggleFeatured(Article $article): JsonResponse
-    {
-        if (!Auth::user()->can('update', $article)) {
-            return response()->json([
-                'message' => 'Vous n\'êtes pas autorisé à modifier cet article',
-            ], 403);
+        if (array_key_exists('sticky', $validated) && $request->boolean('sticky')) {
+            $base->where($articleTable.'.is_sticky', true);
         }
 
-        try {
-            $article->update(['is_featured' => !$article->is_featured]);
-
-            return response()->json([
-                'message' => $article->is_featured ? 'Article mis en avant' : 'Article retiré des mises en avant',
-                'data' => new ArticleResource($article->load(['categories', 'tags', 'author'])),
-            ]);
-
-        } catch (\Exception $e) {
-            return response()->json([
-                'message' => 'Erreur lors de la modification du statut',
-                'error' => config('app.debug') ? $e->getMessage() : 'Une erreur est survenue',
-            ], 500);
+        // Auteurs
+        if (!empty($validated['author_id'])) {
+            $base->where($articleTable.'.author_id', (int)$validated['author_id']);
         }
-    }
-
-    /**
-     * Get article statistics.
-     */
-    public function stats(Article $article): JsonResponse
-    {
-        if (!Auth::user()->can('viewStats', $article)) {
-            return response()->json([
-                'message' => 'Vous n\'êtes pas autorisé à voir les statistiques de cet article',
-            ], 403);
+        if (!empty($validated['author_ids'])) {
+            $authorIds = $toInts($csv($validated['author_ids']))->all();
+            if ($authorIds) $base->whereIn($articleTable.'.author_id', $authorIds);
         }
 
-        $stats = $this->articleService->getArticleStats($article);
+        // Catégories (ids / names / slugs)
+        if (!empty($validated['category_ids']) || !empty($validated['categories']) || !empty($validated['category_slugs'])) {
+            $catIds   = $toInts($csv($validated['category_ids'] ?? ''))->all();
+            $catNames = $csv($validated['categories'] ?? '')->all();
+            $catSlugs = $csv($validated['category_slugs'] ?? '')->all();
+
+            $base->whereHas('categories', function ($q) use ($catIds, $catNames, $catSlugs) {
+                $q->where(function ($qq) use ($catIds, $catNames, $catSlugs) {
+                    if ($catIds)   $qq->orWhereIn('categories.id', $catIds);
+                    if ($catNames) $qq->orWhereIn('categories.name', $catNames);
+                    if ($catSlugs) $qq->orWhereIn('categories.slug', $catSlugs);
+                });
+            });
+        }
+
+        // Tags (ids / names / slugs)
+        if (!empty($validated['tag_ids']) || !empty($validated['tags']) || !empty($validated['tag_slugs'])) {
+            $tagIds   = $toInts($csv($validated['tag_ids'] ?? ''))->all();
+            $tagNames = $csv($validated['tags'] ?? '')->all();
+            $tagSlugs = $csv($validated['tag_slugs'] ?? '')->all();
+
+            $base->whereHas('tags', function ($q) use ($tagIds, $tagNames, $tagSlugs) {
+                $q->where(function ($qq) use ($tagIds, $tagNames, $tagSlugs) {
+                    if ($tagIds)   $qq->orWhereIn('tags.id', $tagIds);
+                    if ($tagNames) $qq->orWhereIn('tags.name', $tagNames);
+                    if ($tagSlugs) $qq->orWhereIn('tags.slug', $tagSlugs);
+                });
+            });
+        }
+
+        // Tri
+        $sortable = ['created_at','updated_at','published_at','title','view_count','rating_average'];
+        if (!empty($validated['sort'])) {
+            foreach ($csv($validated['sort']) as $spec) {
+                [$k, $d] = array_pad(explode(',', $spec, 2), 2, 'asc');
+                $k = trim($k);
+                $d = strtolower(trim($d)) === 'desc' ? 'desc' : 'asc';
+                if (!in_array($k, $sortable, true)) continue;
+                if ($k === 'published_at') {
+                    $base->orderBy($articleTable.'.is_sticky','desc')
+                         ->orderBy($articleTable.'.is_featured','desc');
+                }
+                $base->orderBy($articleTable.'.'.$k, $d);
+            }
+        } else {
+            $sortBy        = $validated['sort_by']        ?? 'published_at';
+            $sortDirection = $validated['sort_direction'] ?? 'desc';
+            if ($sortBy === 'published_at') {
+                $base->orderBy($articleTable.'.is_sticky','desc')
+                     ->orderBy($articleTable.'.is_featured','desc');
+            }
+            $base->orderBy($articleTable.'.'.$sortBy, $sortDirection);
+        }
+
+        // Clone pour facettes (avant pagination)
+        $forFacets = clone $base;
+
+        // Pagination
+        $perPage   = (int) ($validated['per_page'] ?? 15);
+        $paginator = $base->paginate($perPage)->appends($request->query());
+
+        // Facettes (robuste, ne doit jamais planter l’endpoint)
+        $facets = null;
+        if ($request->boolean('include_facets')) {
+            try {
+                $fields = $csv($validated['facet_fields'] ?? 'categories,tags,authors')->all();
+
+                // ids de TOUT l'ensemble filtré (pas seulement la page)
+                $filteredIds = (clone $forFacets)->select($articleTable.'.id')->pluck('id');
+
+                $facets = [];
+
+                if ($filteredIds->isNotEmpty()) {
+                    if (in_array('categories', $fields, true) && Schema::hasTable('categories') && Schema::hasTable('article_category')) {
+                        $facets['categories'] = DB::table('article_category')
+                            ->whereIn('article_id', $filteredIds)
+                            ->join('categories','categories.id','=','article_category.category_id')
+                            ->select('categories.id','categories.name', DB::raw('COUNT(*) as count'))
+                            ->groupBy('categories.id','categories.name')
+                            ->orderByDesc('count')
+                            ->get();
+                    }
+
+                    if (in_array('tags', $fields, true) && Schema::hasTable('tags') && Schema::hasTable('article_tag')) {
+                        $facets['tags'] = DB::table('article_tag')
+                            ->whereIn('article_id', $filteredIds)
+                            ->join('tags','tags.id','=','article_tag.tag_id')
+                            ->select('tags.id','tags.name', DB::raw('COUNT(*) as count'))
+                            ->groupBy('tags.id','tags.name')
+                            ->orderByDesc('count')
+                            ->get();
+                    }
+
+                    if (in_array('authors', $fields, true) && Schema::hasTable('users')) {
+                        $facets['authors'] = DB::table($articleTable)
+                            ->whereIn($articleTable.'.id', $filteredIds)
+                            ->leftJoin('users','users.id','=',$articleTable.'.author_id')
+                            ->select(
+                                'users.id',
+                                DB::raw("COALESCE(users.name, CONCAT('Auteur #', ".$articleTable.".author_id)) as name"),
+                                DB::raw('COUNT(*) as count')
+                            )
+                            ->groupBy('users.id','users.name', $articleTable.'.author_id')
+                            ->orderByDesc('count')
+                            ->get();
+                    }
+                } else {
+                    $facets = ['categories' => collect(), 'tags' => collect(), 'authors' => collect()];
+                }
+            } catch (\Throwable $e) {
+                \Log::error('Facets error: '.$e->getMessage());
+                $facets = null; // on n’échoue pas la route pour autant
+            }
+        }
 
         return response()->json([
-            'data' => $stats,
-        ]);
-    }
-
-    /**
-     * Apply search filters to the query.
-     */
-    private function applySearchFilters($query, array $filters): void
-    {
-        foreach ($filters as $key => $value) {
-            switch ($key) {
-                case 'category_id':
-                    $query->byCategory($value);
-                    break;
-                case 'tag_id':
-                    $query->byTag($value);
-                    break;
-                case 'author_id':
-                    $query->byAuthor($value);
-                    break;
-                case 'date_from':
-                    $query->where('published_at', '>=', $value);
-                    break;
-                case 'date_to':
-                    $query->where('published_at', '<=', $value);
-                    break;
-                case 'min_rating':
-                    $query->where('rating_average', '>=', $value);
-                    break;
-                case 'max_reading_time':
-                    $query->where('reading_time', '<=', $value);
-                    break;
-            }
-        }
-    }
-
-    /**
-     * Bulk publish articles.
-     */
-    public function bulkPublish(Request $request): JsonResponse
-    {
-        $data = $request->validate([
-            'ids' => ['required', 'array', 'min:1'],
-            'ids.*' => ['integer', 'exists:articles,id'],
-        ]);
-
-        $articles = Article::whereIn('id', $data['ids'])->get();
-        foreach ($articles as $article) {
-            if (Auth::user()->can('publish', $article)) {
-                $this->articleService->publishArticle($article, Auth::user());
-            }
-        }
-
-        return response()->json(['message' => 'Articles publiés']);
-    }
-
-    /**
-     * Bulk unpublish articles.
-     */
-    public function bulkUnpublish(Request $request): JsonResponse
-    {
-        $data = $request->validate([
-            'ids' => ['required', 'array', 'min:1'],
-            'ids.*' => ['integer', 'exists:articles,id'],
-        ]);
-
-        $articles = Article::whereIn('id', $data['ids'])->get();
-        foreach ($articles as $article) {
-            if (Auth::user()->can('publish', $article)) {
-                $this->articleService->unpublishArticle($article, Auth::user());
-            }
-        }
-
-        return response()->json(['message' => 'Articles dépubliés']);
-    }
-
-    /**
-     * Bulk archive (soft-delete) articles.
-     */
-    public function bulkArchive(Request $request): JsonResponse
-    {
-        $data = $request->validate([
-            'ids' => ['required', 'array', 'min:1'],
-            'ids.*' => ['integer', 'exists:articles,id'],
-        ]);
-
-        $articles = Article::whereIn('id', $data['ids'])->get();
-        foreach ($articles as $article) {
-            if (Auth::user()->can('delete', $article)) {
-                $article->delete();
-            }
-        }
-
-        return response()->json(['message' => 'Articles archivés']);
-    }
-
-    /**
-     * Bulk delete articles.
-     */
-    public function bulkDelete(Request $request): JsonResponse
-    {
-        $data = $request->validate([
-            'ids' => ['required', 'array', 'min:1'],
-            'ids.*' => ['integer', 'exists:articles,id'],
-            'force' => ['nullable', 'boolean'],
-        ]);
-
-        $force = (bool) ($data['force'] ?? false);
-        $articles = Article::withTrashed()->whereIn('id', $data['ids'])->get();
-        foreach ($articles as $article) {
-            if (Auth::user()->can('delete', $article)) {
-                $force ? $article->forceDelete() : $article->delete();
-            }
-        }
-
-        return response()->json(['message' => $force ? 'Articles supprimés définitivement' : 'Articles supprimés']);
-    }
-
-    /**
-     * Bulk move to category.
-     */
-    public function bulkMoveCategory(Request $request): JsonResponse
-    {
-        $data = $request->validate([
-            'ids' => ['required', 'array', 'min:1'],
-            'ids.*' => ['integer', 'exists:articles,id'],
-            'category_id' => ['required', 'integer', 'exists:categories,id'],
-        ]);
-
-        $articles = Article::whereIn('id', $data['ids'])->get();
-        foreach ($articles as $article) {
-            if (!Auth::user()->can('update', $article)) {
-                continue;
-            }
-            $existing = $article->categories()->pluck('categories.id')->toArray();
-            $sync = array_fill_keys($existing, ['is_primary' => false, 'sort_order' => 0]);
-            $sync[(int) $data['category_id']] = ['is_primary' => true, 'sort_order' => 0];
-            $article->categories()->sync($sync);
-        }
-
-        return response()->json(['message' => 'Articles déplacés de catégorie']);
-    }
-
-    /**
-     * Bulk add tags.
-     */
-    public function bulkAddTags(Request $request): JsonResponse
-    {
-        $data = $request->validate([
-            'ids' => ['required', 'array', 'min:1'],
-            'ids.*' => ['integer', 'exists:articles,id'],
-            'tags' => ['required', 'array', 'min:1'],
-            'tags.*' => ['integer', 'exists:tags,id'],
-        ]);
-
-        $articles = Article::whereIn('id', $data['ids'])->get();
-        foreach ($articles as $article) {
-            if (!Auth::user()->can('update', $article)) {
-                continue;
-            }
-            $article->tags()->syncWithoutDetaching(collect($data['tags'])->mapWithKeys(fn ($id) => [(int) $id => ['sort_order' => 0]])->toArray());
-        }
-
-        return response()->json(['message' => 'Tags ajoutés']);
-    }
-
-    /**
-     * Bulk remove tags.
-     */
-    public function bulkRemoveTags(Request $request): JsonResponse
-    {
-        $data = $request->validate([
-            'ids' => ['required', 'array', 'min:1'],
-            'ids.*' => ['integer', 'exists:articles,id'],
-            'tags' => ['required', 'array', 'min:1'],
-            'tags.*' => ['integer', 'exists:tags,id'],
-        ]);
-
-        $articles = Article::whereIn('id', $data['ids'])->get();
-        foreach ($articles as $article) {
-            if (!Auth::user()->can('update', $article)) {
-                continue;
-            }
-            $article->tags()->detach($data['tags']);
-        }
-
-        return response()->json(['message' => 'Tags retirés']);
-    }
-
-    /**
-     * Import articles from JSON payload (simple placeholder, expand per need).
-     */
-    public function import(Request $request): JsonResponse
-    {
-        $data = $request->validate([
-            'items' => ['required', 'array', 'min:1'],
-            'items.*.title' => ['required', 'string'],
-            'items.*.content' => ['required', 'string'],
-        ]);
-
-        $created = [];
-        foreach ($data['items'] as $item) {
-            $created[] = $this->articleService->createArticle($item, Auth::user());
-        }
-
-        return response()->json(['message' => 'Import terminé', 'count' => count($created)]);
-    }
-
-    /**
-     * Export articles as JSON.
-     */
-    public function export(Request $request): JsonResponse
-    {
-        $articles = Article::with(['categories', 'tags', 'author'])->get();
-        return response()->json(['data' => ArticleResource::collection($articles)]);
-    }
-
-    /**
-     * Provide an import template.
-     */
-    public function downloadTemplate(): JsonResponse
-    {
-        return response()->json([
-            'template' => [
-                'items' => [
-                    ['title' => 'Titre', 'content' => 'Contenu ...', 'status' => 'draft'],
+            'data'  => $paginator->items(),
+            'meta'  => [
+                'current_page'        => $paginator->currentPage(),
+                'per_page'            => $paginator->perPage(),
+                'from'                => $paginator->firstItem(),
+                'to'                  => $paginator->lastItem(),
+                'total'               => $paginator->total(),
+                'last_page'           => $paginator->lastPage(),
+                'relations_included'  => implode(',', $includes),
+                'filters'             => [
+                    'search'      => $validated['search']      ?? null,
+                    'status'      => $validated['status']      ?? 'published',
+                    'date_from'   => $validated['date_from']   ?? null,
+                    'date_to'     => $validated['date_to']     ?? null,
+                    'rating_min'  => $validated['rating_min']  ?? null,
+                    'rating_max'  => $validated['rating_max']  ?? null,
+                    'featured'    => array_key_exists('featured', $validated) ? (bool)$validated['featured'] : null,
+                    'sticky'      => array_key_exists('sticky', $validated)   ? (bool)$validated['sticky']   : null,
                 ],
+                'sort'                => $validated['sort'] ?? null,
+                'sort_by'             => $validated['sort_by'] ?? 'published_at',
+                'sort_direction'      => $validated['sort_direction'] ?? 'desc',
+                'facets'              => $facets,
+            ],
+            'links' => [
+                'first' => $paginator->url(1),
+                'last'  => $paginator->url($paginator->lastPage()),
+                'prev'  => $paginator->previousPageUrl(),
+                'next'  => $paginator->nextPageUrl(),
             ],
         ]);
     }
 
-    /**
-     * Search suggestions.
-     */
-    public function searchSuggestions(Request $request): JsonResponse
-    {
-        $q = (string) $request->validate(['q' => ['nullable', 'string']])['q'] ?? '';
-        $titles = Article::query()->where('title', 'like', "%{$q}%")->limit(10)->pluck('title');
-        return response()->json(['data' => $titles]);
+    public function show(Request $request, string $idOrSlug): JsonResponse
+{
+    // --- Validation des query params ---
+    $validated = $request->validate([
+        'include'        => 'nullable|string',
+        'fields'         => 'nullable|string',
+        'status'         => 'nullable|string|in:draft,pending,published,archived',
+        'password'       => 'nullable|string|max:255',
+        'increment_view' => 'nullable|boolean',
+    ]);
+
+    // --- Helpers ---
+    $csv = fn($v) => collect(is_array($v) ? $v : explode(',', (string)$v))
+        ->map(fn($x) => trim((string)$x))
+        ->filter()
+        ->values();
+
+    $articleTable = (new Article())->getTable();
+
+    $allowedColumns = [
+        'id','tenant_id','title','slug','excerpt','content',
+        'featured_image','featured_image_alt','meta','seo_data',
+        'status','visibility','password',
+        'published_at','scheduled_at','expires_at',
+        'reading_time','word_count','view_count','share_count','comment_count',
+        'rating_average','rating_count',
+        'is_featured','is_sticky','allow_comments','allow_sharing','allow_rating',
+        'author_name','author_bio','author_avatar','author_id',
+        'created_by','updated_by','reviewed_by','reviewed_at','review_notes',
+        'created_at','updated_at','deleted_at',
+    ];
+
+    // Colonnes sélectionnées (on force celles nécessaires aux vérifs métier)
+    $select = $allowedColumns;
+    if (!empty($validated['fields'])) {
+        $requested = $csv($validated['fields'])->all();
+        $sel = array_values(array_intersect($allowedColumns, $requested));
+        if ($sel) $select = $sel;
+    }
+    // Toujours inclure ces colonnes pour la logique interne (sans les exposer si besoin)
+    $requiredForPolicies = ['id','status','published_at','expires_at','password'];
+    $select = array_values(array_unique(array_merge($select, $requiredForPolicies)));
+
+    // Relations autorisées
+    $relationsAllowed = [
+        'categories','tags','media','comments','approvedComments','ratings','shares','history',
+        'author','createdBy','updatedBy','reviewedBy',
+    ];
+    $includes = $relationsAllowed;
+    if (!empty($validated['include'])) {
+        $asked = $csv($validated['include'])->all();
+        $inc   = array_values(array_intersect($relationsAllowed, $asked));
+        if ($inc) $includes = $inc;
     }
 
-    /**
-     * Autocomplete results.
-     */
-    public function autocomplete(Request $request): JsonResponse
-    {
-        $q = (string) $request->validate(['q' => ['nullable', 'string']])['q'] ?? '';
-        $articles = Article::query()->where('title', 'like', "%{$q}%")->limit(10)->get(['id', 'title', 'slug']);
-        return response()->json(['data' => $articles]);
+    // --- Base query ---
+    $base = Article::query()
+        ->from($articleTable)
+        ->select($select)
+        ->with($includes)
+        ->withCount(['comments','approvedComments','ratings','shares','history','media','tags','categories'])
+        ->withAvg('ratings','rating');
+
+    // Statut (par défaut : publié et non expiré)
+    if (!empty($validated['status'])) {
+        $base->where($articleTable.'.status', $validated['status']);
+    } else {
+        $base->where($articleTable.'.status', 'published')
+            ->whereNotNull($articleTable.'.published_at')
+            ->where($articleTable.'.published_at', '<=', now())
+            ->where(function ($q) use ($articleTable) {
+                $q->whereNull($articleTable.'.expires_at')
+                  ->orWhere($articleTable.'.expires_at', '>', now());
+            });
     }
 
-    /**
-     * robots.txt proxy.
-     */
-    public function robots(): \Illuminate\Http\Response
-    {
-        $content = "User-agent: *\nAllow: /\n";
-        return response($content, 200, ['Content-Type' => 'text/plain']);
+    // Ciblage par id ou slug
+    $isId = ctype_digit($idOrSlug);
+    $base->where($articleTable.'.'.($isId ? 'id' : 'slug'), $idOrSlug);
+
+    // Récupération
+    $article = $base->firstOrFail();
+
+    // Protection par mot de passe (si défini sur l'article)
+    $providedPassword = $validated['password'] ?? null;
+    if (!empty($article->password) && $article->password !== $providedPassword) {
+        return response()->json(['message' => 'Password required or incorrect.'], 403);
     }
 
-    /**
-     * SEO meta for a single article.
-     */
-    public function metaTags(Article $article): JsonResponse
-    {
-        return response()->json([
-            'title' => $article->title,
-            'description' => $article->meta['description'] ?? null,
-            'keywords' => $article->meta['keywords'] ?? null,
-        ]);
+    // Incrémenter le compteur de vues si demandé
+    if ($request->boolean('increment_view')) {
+        Article::where('id', $article->id)->increment('view_count');
+        // refléter la nouvelle valeur dans la réponse
+        $article->view_count = (int) ($article->view_count ?? 0) + 1;
     }
 
-    /**
-     * Preview article (auth required).
-     */
-    public function preview(Article $article): JsonResponse
-    {
-        if (!Auth::check() || !Auth::user()->can('view', $article)) {
-            return response()->json(['message' => 'Non autorisé'], 403);
-        }
-        return response()->json(['data' => new ArticleResource($article->load(['categories', 'tags', 'author']))]);
-    }
+    // Ne jamais exposer le champ password dans la réponse
+    $article->makeHidden(['password']);
 
-    /**
-     * Generate preview token (placeholder, store in cache for 15 min).
-     */
-    public function generatePreviewToken(Article $article): JsonResponse
-    {
-        if (!Auth::check() || !Auth::user()->can('update', $article)) {
-            return response()->json(['message' => 'Non autorisé'], 403);
-        }
-        $token = bin2hex(random_bytes(16));
-        CacheFacade::put('preview_'.$article->id.'_'.$token, true, 900);
-        return response()->json(['token' => $token]);
-    }
+    return response()->json([
+        'data' => $article,
+        'meta' => [
+            'relations_included' => implode(',', $includes),
+            'filters' => [
+                'status' => $validated['status'] ?? 'published',
+            ],
+        ],
+    ]);
+}
 
-    /**
-     * Webhook endpoints.
-     */
-    public function webhookPublished(Request $request): JsonResponse
-    {
-        return response()->json(['message' => 'Webhook reçu (published)']);
-    }
-
-    public function webhookUpdated(Request $request): JsonResponse
-    {
-        return response()->json(['message' => 'Webhook reçu (updated)']);
-    }
-
-    public function webhookDeleted(Request $request): JsonResponse
-    {
-        return response()->json(['message' => 'Webhook reçu (deleted)']);
-    }
-
-    /**
-     * Health endpoints.
-     */
-    public function health(): JsonResponse
-    {
-        return response()->json(['status' => 'ok']);
-    }
-
-    public function databaseHealth(): JsonResponse
-    {
-        try {
-            Article::query()->select('id')->limit(1)->get();
-            return response()->json(['database' => 'ok']);
-        } catch (\Throwable $e) {
-            return response()->json(['database' => 'error'], 500);
-        }
-    }
-
-    public function cacheHealth(): JsonResponse
-    {
-        try {
-            CacheFacade::put('health_check', '1', 5);
-            $ok = CacheFacade::get('health_check') === '1';
-            return response()->json(['cache' => $ok ? 'ok' : 'error'], $ok ? 200 : 500);
-        } catch (\Throwable $e) {
-            return response()->json(['cache' => 'error'], 500);
-        }
-    }
 }

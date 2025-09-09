@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\Api\ArticleController;
 use App\Http\Controllers\Api\EmailVerificationController;
 use App\Http\Controllers\Auth\PasswordController;
 use App\Http\Controllers\AuthController;
@@ -143,11 +144,11 @@ Route::apiResource('categories', CategoryController::class);
 // use App\Http\Controllers\Api\AnalyticsController;
 
 // // Articles - Public routes
-// Route::prefix('articles')->name('articles.')->group(function () {
-//     Route::get('/', [ArticleController::class, 'index'])->name('index');
-//     Route::get('/search', [ArticleController::class, 'search'])->name('search');
-//     Route::get('/{slug}', [ArticleController::class, 'show'])->name('show');
-// });
+Route::prefix('articles')->name('articles.')->group(function () {
+    Route::get('/', [ArticleController::class, 'index'])->name('index');
+    Route::get('/search', [ArticleController::class, 'search'])->name('search');
+    Route::get('/{slug}', [ArticleController::class, 'show'])->name('show');
+});
 
 // // Articles - Protected routes
 // Route::middleware('auth:sanctum')->prefix('articles')->name('articles.')->group(function () {
