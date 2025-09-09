@@ -9,8 +9,6 @@ use App\Models\Tag;
 use App\Models\User;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Facades\Cache;
-use Illuminate\Support\Facades\Event;
-use Illuminate\Support\Facades\Log;
 use App\Events\ArticleCreated;
 use App\Events\ArticleUpdated;
 use App\Events\ArticlePublished;
@@ -27,7 +25,6 @@ class ArticleService
         $this->syncRelations($article, $data);
 
         Cache::forget('articles_list');
-
         event(new ArticleCreated($article, $actor));
 
         return $article->fresh();
@@ -41,7 +38,6 @@ class ArticleService
         $this->syncRelations($article, $data);
 
         Cache::forget('articles_list');
-
         event(new ArticleUpdated($article, $actor, $article->getChanges()));
 
         return $article->fresh();
@@ -77,7 +73,9 @@ class ArticleService
     public function duplicateArticle(Article $source, User $actor): Article
     {
         $duplicate = $source->replicate([
-            'slug', 'published_at', 'reviewed_at', 'reviewed_by', 'view_count', 'share_count', 'comment_count', 'rating_average', 'rating_count'
+            'slug', 'published_at', 'reviewed_at', 'reviewed_by',
+            'view_count', 'share_count', 'comment_count',
+            'rating_average', 'rating_count'
         ]);
         $duplicate->title = $source->title . ' (copie)';
         $duplicate->slug = null;
@@ -87,9 +85,11 @@ class ArticleService
         $duplicate->published_at = null;
         $duplicate->save();
 
-        // Relations
         $duplicate->categories()->sync($source->categories->mapWithKeys(function ($cat) {
-            return [$cat->id => ['is_primary' => $cat->pivot->is_primary, 'sort_order' => $cat->pivot->sort_order]];
+            return [$cat->id => [
+                'is_primary' => $cat->pivot->is_primary,
+                'sort_order' => $cat->pivot->sort_order
+            ]];
         })->toArray());
 
         $duplicate->tags()->sync($source->tags->mapWithKeys(function ($tag) {
@@ -116,7 +116,8 @@ class ArticleService
     private function fillArticle(Article $article, array $data, User $actor, bool $isCreate): void
     {
         $fields = [
-            'tenant_id', 'title', 'slug', 'excerpt', 'content', 'featured_image', 'featured_image_alt', 'meta', 'seo_data',
+            'tenant_id', 'title', 'slug', 'excerpt', 'content',
+            'featured_image', 'featured_image_alt', 'meta', 'seo_data',
             'status', 'visibility', 'password', 'published_at', 'scheduled_at', 'expires_at',
             'is_featured', 'is_sticky', 'allow_comments', 'allow_sharing', 'allow_rating',
             'author_name', 'author_bio', 'author_avatar', 'author_id',
@@ -158,5 +159,3 @@ class ArticleService
         }
     }
 }
-
-

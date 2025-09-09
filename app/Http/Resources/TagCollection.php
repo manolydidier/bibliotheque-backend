@@ -62,32 +62,32 @@ class TagCollection extends ResourceCollection
             ],
 
             // Liens HATEOAS
-            '_links' => [
-                'self' => [
-                    'href' => $request->url(),
-                    'method' => 'GET',
-                ],
-                'create' => $this->when($canCreate, [
-                    'href' => route('api.tags.store'),
-                    'method' => 'POST',
-                ]),
-                'popular' => [
-                    'href' => route('api.tags.popular'),
-                    'method' => 'GET',
-                ],
-                'unused' => [
-                    'href' => route('api.tags.unused'),
-                    'method' => 'GET',
-                ],
-                'articles' => [
-                    'href' => route('api.articles.index'),
-                    'method' => 'GET',
-                ],
-                'categories' => [
-                    'href' => route('api.categories.index'),
-                    'method' => 'GET',
-                ],
-            ],
+            // '_links' => [
+            //     'self' => [
+            //         'href' => $request->url(),
+            //         'method' => 'GET',
+            //     ],
+            //     'create' => $this->when($canCreate, [
+            //         'href' => route('api.tags.store'),
+            //         'method' => 'POST',
+            //     ]),
+            //     'popular' => [
+            //         'href' => route('api.tags.popular'),
+            //         'method' => 'GET',
+            //     ],
+            //     'unused' => [
+            //         'href' => route('api.tags.unused'),
+            //         'method' => 'GET',
+            //     ],
+            //     'articles' => [
+            //         'href' => route('api.articles.index'),
+            //         'method' => 'GET',
+            //     ],
+            //     'categories' => [
+            //         'href' => route('api.categories.index'),
+            //         'method' => 'GET',
+            //     ],
+            // ],
 
             // Actions disponibles
             '_actions' => [

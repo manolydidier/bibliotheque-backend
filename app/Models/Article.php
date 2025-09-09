@@ -11,15 +11,13 @@ use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Database\Eloquent\Builder;
-use Illuminate\Database\Eloquent\Concerns\HasUuids;
 use Illuminate\Database\Eloquent\Casts\Attribute;
 use Illuminate\Support\Str;
 use Illuminate\Support\Facades\Cache;
-use Carbon\Carbon;
 
 class Article extends Model
 {
-    use HasFactory, SoftDeletes, HasUuids;
+    use HasFactory, SoftDeletes;
 
     protected $fillable = [
         'tenant_id',
@@ -58,8 +56,10 @@ class Article extends Model
         'reviewed_by',
         'reviewed_at',
         'review_notes',
+        'uuid', // on garde la colonne uuid, mais ce n'est PAS la clé primaire
     ];
 
+    // Clé primaire = entier auto-increment (par défaut), donc pas besoin de HasUuids
     protected $casts = [
         'meta' => 'array',
         'seo_data' => 'array',
@@ -98,7 +98,9 @@ class Article extends Model
         'rating_count' => 0,
     ];
 
-    // Relationships
+    // ---------------------------
+    // Relations
+    // ---------------------------
     public function categories(): BelongsToMany
     {
         return $this->belongsToMany(Category::class, 'article_categories')
@@ -163,7 +165,9 @@ class Article extends Model
         return $this->belongsTo(User::class, 'reviewed_by');
     }
 
+    // ---------------------------
     // Scopes
+    // ---------------------------
     public function scopePublished(Builder $query): void
     {
         $query->where('status', ArticleStatus::PUBLISHED)
@@ -191,16 +195,12 @@ class Article extends Model
 
     public function scopeByCategory(Builder $query, int $categoryId): void
     {
-        $query->whereHas('categories', function ($q) use ($categoryId) {
-            $q->where('categories.id', $categoryId);
-        });
+        $query->whereHas('categories', fn($q) => $q->where('categories.id', $categoryId));
     }
 
     public function scopeByTag(Builder $query, int $tagId): void
     {
-        $query->whereHas('tags', function ($q) use ($tagId) {
-            $q->where('tags.id', $tagId);
-        });
+        $query->whereHas('tags', fn($q) => $q->where('tags.id', $tagId));
     }
 
     public function scopeByAuthor(Builder $query, int $authorId): void
@@ -229,7 +229,9 @@ class Article extends Model
               ->orderBy('published_at', 'desc');
     }
 
+    // ---------------------------
     // Accessors & Mutators
+    // ---------------------------
     protected function slug(): Attribute
     {
         return Attribute::make(
@@ -252,26 +254,28 @@ class Article extends Model
             get: fn (?string $value) => $value,
             set: function (?string $value) {
                 if (empty($value) && !empty($this->content)) {
-                    return Str::limit(strip_tags($this->content), 160);
+                    return \Illuminate\Support\Str::limit(strip_tags($this->content), 160);
                 }
                 return $value;
             },
         );
     }
 
-    // Methods
+    // ---------------------------
+    // Helpers
+    // ---------------------------
     public function isPublished(): bool
     {
-        return $this->status === ArticleStatus::PUBLISHED 
-            && $this->published_at 
+        return $this->status === ArticleStatus::PUBLISHED
+            && $this->published_at
             && $this->published_at->isPast()
             && (!$this->expires_at || $this->expires_at->isFuture());
     }
 
     public function isScheduled(): bool
     {
-        return $this->status === ArticleStatus::PENDING 
-            && $this->scheduled_at 
+        return $this->status === ArticleStatus::PENDING
+            && $this->scheduled_at
             && $this->scheduled_at->isFuture();
     }
 
@@ -297,19 +301,9 @@ class Article extends Model
 
     public function canBeViewedBy(?User $user): bool
     {
-        if ($this->isPublic()) {
-            return true;
-        }
-
-        if ($this->isPrivate() && !$user) {
-            return false;
-        }
-
-        if ($this->isPasswordProtected()) {
-            // Check if user has access (implement your logic here)
-            return true;
-        }
-
+        if ($this->isPublic()) return true;
+        if ($this->isPrivate() && !$user) return false;
+        if ($this->isPasswordProtected()) return true; // à adapter
         return false;
     }
 
@@ -338,7 +332,7 @@ class Article extends Model
 
         $this->update([
             'rating_average' => $ratingStats->avg_rating ?? 0.00,
-            'rating_count' => $ratingStats->total_ratings ?? 0,
+            'rating_count'   => $ratingStats->total_ratings ?? 0,
         ]);
     }
 
@@ -346,7 +340,8 @@ class Article extends Model
     {
         $wordsPerMinute = 200;
         $wordCount = str_word_count(strip_tags($this->content));
-        return max(1, round($wordCount / $wordsPerMinute));
+        return max(1, (int) round($wordCount / $wordsPerMinute));
+        // on pourrait aussi écrire en base si besoin
     }
 
     public function calculateWordCount(): int
@@ -356,56 +351,52 @@ class Article extends Model
 
     public function getPrimaryCategory(): ?Category
     {
-        return $this->categories()
-            ->wherePivot('is_primary', true)
-            ->first();
+        return $this->categories()->wherePivot('is_primary', true)->first();
     }
 
     public function getUrl(): string
     {
-        return route('articles.show', $this->slug);
+             return url("/api/articles/{$this->slug}");
     }
 
     public function getFeaturedImageUrl(): ?string
     {
-        if ($this->featured_image) {
-            return asset('storage/' . $this->featured_image);
-        }
-        return null;
+        return $this->featured_image ? asset('storage/' . $this->featured_image) : null;
     }
 
     public function getAuthorDisplayName(): string
     {
-        if ($this->author) {
-            return $this->author->name;
-        }
-        return $this->author_name ?: 'Anonyme';
+        return $this->author?->name ?? ($this->author_name ?: 'Anonyme');
     }
 
     public function getAuthorAvatarUrl(): ?string
     {
-        if ($this->author && $this->author->profile_photo_url) {
+        if ($this->author?->profile_photo_url) {
             return $this->author->profile_photo_url;
         }
-        if ($this->author_avatar) {
-            return asset('storage/' . $this->author_avatar);
-        }
-        return null;
+        return $this->author_avatar ? asset('storage/' . $this->author_avatar) : null;
     }
 
+    // ---------------------------
     // Events
+    // ---------------------------
     protected static function booted(): void
     {
         static::creating(function (Article $article) {
-            if (empty($article->slug)) {
+            // Génère un uuid si absent (et on NE TOUCHE PAS à id)
+            if (empty($article->uuid)) {
+                $article->uuid = (string) Str::uuid();
+            }
+
+            if (empty($article->slug) && !empty($article->title)) {
                 $article->slug = Str::slug($article->title);
             }
-            
-            if (empty($article->excerpt)) {
-                $article->excerpt = Str::limit(strip_tags($article->content), 160);
+
+            if (empty($article->excerpt) && !empty($article->content)) {
+                $article->excerpt = \Illuminate\Support\Str::limit(strip_tags($article->content), 160);
             }
-            
-            $article->word_count = $article->calculateWordCount();
+
+            $article->word_count   = $article->calculateWordCount();
             $article->reading_time = $article->calculateReadingTime();
         });
 
@@ -413,15 +404,14 @@ class Article extends Model
             if ($article->isDirty('title') && empty($article->slug)) {
                 $article->slug = Str::slug($article->title);
             }
-            
+
             if ($article->isDirty('content')) {
-                $article->word_count = $article->calculateWordCount();
+                $article->word_count   = $article->calculateWordCount();
                 $article->reading_time = $article->calculateReadingTime();
             }
         });
 
         static::saved(function (Article $article) {
-            // Clear cache when article is updated
             Cache::forget("article_{$article->id}");
             Cache::forget("article_{$article->slug}");
         });

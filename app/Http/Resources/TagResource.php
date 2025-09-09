@@ -53,32 +53,32 @@ class TagResource extends JsonResource
             'deleted_at' => $this->when($this->deleted_at, $this->deleted_at?->toISOString()),
 
             // Liens HATEOAS
-            '_links' => [
-                'self' => [
-                    'href' => route('api.tags.show', $this->uuid),
-                    'method' => 'GET',
-                ],
-                'edit' => $this->when($canManage, [
-                    'href' => route('api.tags.update', $this->uuid),
-                    'method' => 'PUT',
-                ]),
-                'delete' => $this->when($canManage, [
-                    'href' => route('api.tags.destroy', $this->uuid),
-                    'method' => 'DELETE',
-                ]),
-                'toggle_active' => $this->when($canManage, [
-                    'href' => route('api.tags.toggle-active', $this->uuid),
-                    'method' => 'PATCH',
-                ]),
-                'articles' => [
-                    'href' => route('api.tags.articles', $this->uuid),
-                    'method' => 'GET',
-                ],
-                'related_tags' => [
-                    'href' => route('api.tags.related', $this->uuid),
-                    'method' => 'GET',
-                ],
-            ],
+            // '_links' => [
+            //     'self' => [
+            //         'href' => route('api.tags.show', $this->uuid),
+            //         'method' => 'GET',
+            //     ],
+            //     'edit' => $this->when($canManage, [
+            //         'href' => route('api.tags.update', $this->uuid),
+            //         'method' => 'PUT',
+            //     ]),
+            //     'delete' => $this->when($canManage, [
+            //         'href' => route('api.tags.destroy', $this->uuid),
+            //         'method' => 'DELETE',
+            //     ]),
+            //     'toggle_active' => $this->when($canManage, [
+            //         'href' => route('api.tags.toggle-active', $this->uuid),
+            //         'method' => 'PATCH',
+            //     ]),
+            //     'articles' => [
+            //         'href' => route('api.tags.articles', $this->uuid),
+            //         'method' => 'GET',
+            //     ],
+            //     'related_tags' => [
+            //         'href' => route('api.tags.related', $this->uuid),
+            //         'method' => 'GET',
+            //     ],
+            // ],
 
             // Actions disponibles
             '_actions' => $this->when($canManage, [
