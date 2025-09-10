@@ -8,13 +8,13 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Database\Eloquent\Builder;
-use Illuminate\Database\Eloquent\Concerns\HasUuids;
 use Illuminate\Database\Eloquent\Casts\Attribute;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Str;
 
 class Comment extends Model
 {
-    use HasFactory, SoftDeletes, HasUuids;
+    use HasFactory, SoftDeletes;
 
     protected $fillable = [
         'tenant_id',
@@ -36,6 +36,7 @@ class Comment extends Model
         'moderation_notes',
         'created_by',
         'updated_by',
+        // 'uuid' est généré automatiquement dans booted()
     ];
 
     protected $casts = [
@@ -99,7 +100,7 @@ class Comment extends Model
 
     public function scopePending(Builder $query): void
     {
-        $query->query->where('status', 'pending');
+        $query->where('status', 'pending'); // ✅ correction
     }
 
     public function scopeRejected(Builder $query): void
@@ -256,7 +257,7 @@ class Comment extends Model
 
     public function canBeRepliedTo(): bool
     {
-        return $this->isApproved() && $this->getLevel() < 3; // Max 3 levels deep
+        return $this->isApproved() && $this->getLevel() < 3; // Max 3 niveaux
     }
 
     public function canBeEditedBy(?User $user): bool
@@ -264,13 +265,9 @@ class Comment extends Model
         if (!$user) {
             return false;
         }
-
-        // Comment author can edit within 1 hour
         if ($this->user_id === $user->id) {
             return $this->created_at->diffInHours(now()) <= 1;
         }
-
-        // Moderators can always edit
         return $user->can('moderate comments');
     }
 
@@ -279,13 +276,9 @@ class Comment extends Model
         if (!$user) {
             return false;
         }
-
-        // Comment author can delete within 1 hour
         if ($this->user_id === $user->id) {
             return $this->created_at->diffInHours(now()) <= 1;
         }
-
-        // Moderators can always delete
         return $user->can('moderate comments');
     }
 
@@ -299,7 +292,13 @@ class Comment extends Model
         ]);
 
         // Update article comment count
-        $this->article->incrementCommentCount();
+        if ($this->relationLoaded('article') || $this->article()->exists()) {
+            if (method_exists($this->article, 'incrementCommentCount')) {
+                $this->article->incrementCommentCount();
+            } else {
+                $this->article->increment('comment_count');
+            }
+        }
     }
 
     public function reject(User $moderator, string $notes): void
@@ -375,9 +374,17 @@ class Comment extends Model
     protected static function booted(): void
     {
         static::creating(function (Comment $comment) {
+            // Génère une valeur pour la colonne 'uuid' (pas la PK)
+            if (empty($comment->uuid)) {
+                $comment->uuid = (string) Str::uuid();
+            }
             if (Auth::check()) {
-                $comment->user_id = Auth::id();
+                $comment->user_id    = Auth::id();
                 $comment->created_by = Auth::id();
+
+                // Duplique le nom/email si non fournis
+                $comment->guest_name  = $comment->guest_name  ?? (Auth::user()->name  ?? null);
+                $comment->guest_email = $comment->guest_email ?? (Auth::user()->email ?? null);
             }
         });
 
@@ -389,8 +396,12 @@ class Comment extends Model
 
         static::deleted(function (Comment $comment) {
             // Update article comment count
-            if ($comment->isApproved()) {
-                $comment->article->decrement('comment_count');
+            if ($comment->isApproved() && $comment->article) {
+                if (method_exists($comment->article, 'decrementCommentCount')) {
+                    $comment->article->decrementCommentCount();
+                } else {
+                    $comment->article->decrement('comment_count');
+                }
             }
         });
     }
