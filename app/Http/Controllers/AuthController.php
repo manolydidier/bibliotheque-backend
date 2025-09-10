@@ -240,18 +240,23 @@ class AuthController extends Controller
     /**
      * 🧾 Affichage du profil utilisateur
      */
-    public function showProfile(Request $request, $id): JsonResponse
-    {
-        $user = User::with('roles')->findOrFail($id);
-        if (Auth::id() !== $user->id) {
-            return response()->json(['message' => 'Unauthorized'], 403);
+        public function showProfile(Request $request): JsonResponse
+        {
+            $user = Auth::user();
+            
+            if (!$user) {
+                return response()->json(['message' => 'Unauthenticated'], 401);
+            }
+
+            // Charger les relations nécessaires
+            $user->load('roles');
+
+            return response()->json([
+                'user'        => $user,
+                'roles'       => $user->roles,
+                'permissions' => method_exists($user, 'permissions') ? $user->permissions() : []
+            ]);
         }
-        return response()->json([
-            'user'        => $user,
-            'roles'       => $user->roles,
-            'permissions' => method_exists($user, 'permissions') ? $user->permissions() : []
-        ]);
-    }
 
     /**
      * 📝 Mise à jour de profil (avec détection de duplicats)
