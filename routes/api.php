@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\Api\ArticleController;
+use App\Http\Controllers\Api\ArticleTagController;
 use App\Http\Controllers\Api\EmailVerificationController;
 use App\Http\Controllers\Auth\PasswordController;
 use App\Http\Controllers\AuthController;
@@ -112,26 +113,19 @@ Route::get('/auth/google/callback', [AuthController::class, 'googleCallback'])
         Route::post('/email/verification/request', [EmailVerificationController::class, 'requestCode']);
         Route::post('/email/verification/confirm', [EmailVerificationController::class, 'confirm']);
 
-    // Route::prefix('auth/password')->group(function () {
-    // Route::post('/forgot', [PasswordController::class, 'sendResetLink'])->middleware('throttle:10,1');
-    // Route::post('/reset',  [PasswordController::class, 'reset'])->middleware('throttle:10,1');
-    //     });
-
-Route::post('auth/password/forgot', [PasswordController::class, 'forgot'])->middleware('throttle:10,1');
-Route::post('auth/password/reset',  [PasswordController::class, 'reset'])->middleware('throttle:10,1');
+        Route::post('auth/password/forgot', [PasswordController::class, 'forgot'])->middleware('throttle:10,1');
+        Route::post('auth/password/reset',  [PasswordController::class, 'reset'])->middleware('throttle:10,1');
 
 
 
+        Route::prefix('articles')->name('articles.')->group(function () {
+            Route::get('/', [ArticleController::class, 'index'])->name('index');
+            Route::get('/search', [ArticleController::class, 'search'])->name('search');
+            Route::get('/{slug}', [ArticleController::class, 'show'])->name('show');
+        });
 
-Route::prefix('articles')->name('articles.')->group(function () {
-    Route::get('/', [ArticleController::class, 'index'])->name('index');
-    Route::get('/search', [ArticleController::class, 'search'])->name('search');
-    Route::get('/{slug}', [ArticleController::class, 'show'])->name('show');
-});
-
-
-
-
+// ========================================
+// COMMENTS - API ROUTES
 Route::apiResource('comments', CommentController::class)->only(['index','store','update','destroy']);
 
 Route::get('comments/{comment}/replies', [CommentController::class, 'replies']);
@@ -154,6 +148,49 @@ Route::post('comments/{comment}/spam',    [CommentController::class, 'spam']);
 Route::post('comments/{comment}/feature', [CommentController::class, 'feature']);
 
 
+// ========================================
+
+// // Categories
+Route::prefix('categories')->name('categories.')->group(function () {
+    Route::get('/', [CategoryController::class, 'index'])->name('index');
+    Route::get('/{category}', [CategoryController::class, 'show'])->name('show');
+    
+    Route::middleware('auth:sanctum')->group(function () {
+        Route::post('/', [CategoryController::class, 'store'])->name('store');
+        Route::put('/{category}', [CategoryController::class, 'update'])->name('update');
+        Route::delete('/{category}', [CategoryController::class, 'destroy'])->name('destroy');
+        Route::post('/{category}/toggle-active', [CategoryController::class, 'toggleActive'])->name('toggle-active');
+        Route::post('/{category}/toggle-featured', [CategoryController::class, 'toggleFeatured'])->name('toggle-featured');
+    });
+});
+
+// ========================================
+
+// // Tags
+Route::prefix('tags')->name('tags.')->group(function () {
+    Route::get('/tagsadvance', [TagController::class, 'index2']);
+    Route::get('/', [TagController::class, 'index'])->name('index');
+    Route::get('/popular', [TagController::class, 'popular'])->name('popular');
+    Route::get('/{tag}', [TagController::class, 'show'])->name('show');
+    
+    Route::middleware('auth:sanctum')->group(function () {
+        Route::post('/', [TagController::class, 'store'])->name('store');
+        Route::put('/{tag}', [TagController::class, 'update'])->name('update');
+        Route::delete('/{tag}', [TagController::class, 'destroy'])->name('destroy');
+        Route::post('/{tag}/toggle-active', [TagController::class, 'toggleActive'])->name('toggle-active');
+    });
+});
+
+// ========================================
+// PIVOT ENTRE ARTICLES ET TAGS
+
+Route::prefix('articlestags/{article}')->group(function () {
+    Route::get('tags', [ArticleTagController::class, 'index']);       // lister
+    Route::put('tags', [ArticleTagController::class, 'sync']);        // remplacer tous
+    Route::post('tags', [ArticleTagController::class, 'attach']);     // ajouter 1
+    Route::delete('tags/{tag}', [ArticleTagController::class, 'detach']); // retirer 1
+    Route::patch('tags/reorder', [ArticleTagController::class, 'reorder']); // MAJ ordre
+});
 
 // ========================================
 // MODULE ARTICLES - API ROUTES
@@ -183,33 +220,7 @@ Route::post('comments/{comment}/feature', [CommentController::class, 'feature'])
 //     Route::get('/{article}/stats', [ArticleController::class, 'stats'])->name('stats');
 // });
 
-// // Categories
-// Route::prefix('categories')->name('categories.')->group(function () {
-//     Route::get('/', [CategoryController::class, 'index'])->name('index');
-//     Route::get('/{category}', [CategoryController::class, 'show'])->name('show');
-    
-//     Route::middleware('auth:sanctum')->group(function () {
-//         Route::post('/', [CategoryController::class, 'store'])->name('store');
-//         Route::put('/{category}', [CategoryController::class, 'update'])->name('update');
-//         Route::delete('/{category}', [CategoryController::class, 'destroy'])->name('destroy');
-//         Route::post('/{category}/toggle-active', [CategoryController::class, 'toggleActive'])->name('toggle-active');
-//         Route::post('/{category}/toggle-featured', [CategoryController::class, 'toggleFeatured'])->name('toggle-featured');
-//     });
-// });
 
-// // Tags
-// Route::prefix('tags')->name('tags.')->group(function () {
-//     Route::get('/', [TagController::class, 'index'])->name('index');
-//     Route::get('/popular', [TagController::class, 'popular'])->name('popular');
-//     Route::get('/{tag}', [TagController::class, 'show'])->name('show');
-    
-//     Route::middleware('auth:sanctum')->group(function () {
-//         Route::post('/', [TagController::class, 'store'])->name('store');
-//         Route::put('/{tag}', [TagController::class, 'update'])->name('update');
-//         Route::delete('/{tag}', [TagController::class, 'destroy'])->name('destroy');
-//         Route::post('/{tag}/toggle-active', [TagController::class, 'toggleActive'])->name('toggle-active');
-//     });
-// });
 
 // // Media
 // Route::middleware('auth:sanctum')->prefix('media')->name('media.')->group(function () {

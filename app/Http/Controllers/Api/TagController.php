@@ -22,6 +22,37 @@ class TagController extends Controller
         return response()->json($tags);
     }
 
+
+
+     /**
+     * Liste des tags avec recherche + pagination.
+     * GET /api/tags?q=...&page=1&per_page=20
+     */
+    public function index2(Request $request): JsonResponse
+    {
+         $q = trim((string) $request->get('q', ''));
+        $perPage = (int) $request->get('per_page', 5);
+        $perPage = $perPage > 0 ? $perPage : 10;
+
+        $query = Tag::query()
+            ->when($q !== '', function ($r) use ($q) {
+                $like = '%' . str_replace(['%', '_'], ['\%', '\_'], $q) . '%';
+                $r->where(function ($q2) use ($like) {
+                    $q2->where('name', 'like', $like)
+                       ->orWhere('description', 'like', $like);
+                });
+            })
+            // tri stable & déterministe pour éviter les doublons entre pages
+            ->orderBy('name', 'asc')
+            ->orderBy('id', 'asc')
+            ->select('tags.*')
+            ->distinct();
+
+        $tags = $query->paginate($perPage);
+
+        return response()->json($tags);
+    }
+
     /**
      * Crée un nouveau tag.
      */

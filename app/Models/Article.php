@@ -114,7 +114,7 @@ class Article extends Model
             ->withPivot('sort_order')
             ->withTimestamps();
     }
-
+    
     public function media(): HasMany
     {
         return $this->hasMany(ArticleMedia::class);
