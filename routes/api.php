@@ -19,6 +19,7 @@ use App\Http\Controllers\UserRolePermissionController;
 use App\Http\Controllers\Api\TagController;
 use App\Http\Controllers\Api\CategoryController;
 use App\Http\Controllers\Api\CommentController;
+use App\Http\Controllers\Api\ShareController;
 use Illuminate\Support\Facades\Log;
 
 
@@ -191,6 +192,20 @@ Route::prefix('articlestags/{article}')->group(function () {
     Route::delete('tags/{tag}', [ArticleTagController::class, 'detach']); // retirer 1
     Route::patch('tags/reorder', [ArticleTagController::class, 'reorder']); // MAJ ordre
 });
+
+// ========================================
+// ROUTES PARTAGES - API ROUTES
+
+// Envoi d'e-mail de partage (utilisé par ton ShareButton -> shareByEmailAuto)
+Route::post('/share/email', [ShareController::class, 'email'])->name('shares.email');
+
+// Création d'un partage générique (optionnel mais recommandé pour tracer Facebook/WhatsApp/…)
+Route::post('/share', [ShareController::class, 'store'])->name('shares.store');
+
+// Marquer une conversion (ex: l’utilisateur a réalisé une action après un partage)
+Route::post('/share/{share}/convert', [ShareController::class, 'convert'])->name('shares.convert');
+
+Route::get('/share/ping', [ShareController::class, 'ping'])->name('shares.ping');
 
 // ========================================
 // MODULE ARTICLES - API ROUTES

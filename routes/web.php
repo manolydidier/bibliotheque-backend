@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\Api\ShareController;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\Facades\Mail;
 
@@ -19,3 +20,6 @@ Route::get('/_mail-test', function () {
     });
     return 'ok';
 });
+// Route courte pour rediriger et incrémenter le compteur
+Route::get('/s/{share}', [ShareController::class, 'redirect'])
+    ->name('shares.redirect');

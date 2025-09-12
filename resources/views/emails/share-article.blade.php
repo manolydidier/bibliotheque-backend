@@ -1,10 +1,10 @@
 <!doctype html>
-<html lang="{{ $lang ?? 'fr' }}">
+<html lang="fr">
   <head>
     <meta charset="utf-8">
     <meta name="x-apple-disable-message-reformatting">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>{{ $lang === 'en' ? 'Verification code' : 'Code de vérification' }}</title>
+    <title>Partage d'article</title>
     <style>
       /* Reset & Base */
       * { box-sizing: border-box; }
@@ -59,93 +59,103 @@
                       </svg>
                     </div>
                     <h1 style="color:#ffffff; font-size:20px; font-weight:700; margin:0; letter-spacing:-0.02em;">
-                      {{ $lang === 'en' ? 'Your verification code' : 'Votre code de vérification' }}
+                      Article partagé avec vous
                     </h1>
                   </div>
                 </td>
                 <td align="right" style="vertical-align:top;">
-                  <div style="color:rgba(255,255,255,0.9); font-size:13px; font-weight:500; padding:6px 12px; background:rgba(255,255,255,0.15); border-radius:20px; backdrop-filter:blur(10px);">
-                    {{ ($now ?? now())->format('d/m/Y \à H:i') }}
+                  <div style="color:rgba(255,255,255,0.8); font-size:13px; font-weight:500; padding:6px 12px; background:rgba(255,255,255,0.15); border-radius:20px; backdrop-filter:blur(10px);">
+                    {{ now()->format('d/m/Y à H:i') }}
                   </div>
                 </td>
               </tr>
             </table>
           </div>
 
-          <!-- Content -->
-          <div class="content-padding" style="padding:28px;">
-            <h2 class="title" style="margin:0 0 8px 0; font-size:24px; line-height:32px; color:#0f172a; font-weight:700; letter-spacing:-0.02em;">
-              {{ $lang === 'en' ? 'Hello,' : 'Bonjour,' }}
-            </h2>
+          <!-- Article Content -->
+          @if(!empty($article))
+            <!-- Title -->
+            <div class="content-padding" style="padding:32px 28px 16px 28px;">
+              <h2 class="title" style="margin:0; font-size:24px; line-height:32px; color:#0f172a; font-weight:700; letter-spacing:-0.02em;">
+                {{ $article->title }}
+              </h2>
+            </div>
+            
+            <!-- Excerpt -->
+            @if(!empty($article->excerpt))
+              <div class="content-padding" style="padding:0 28px 20px 28px;">
+                <div style="background:linear-gradient(90deg, #f1f5f9, #e2e8f0); height:1px; margin-bottom:16px;"></div>
+                <p class="text" style="margin:0; color:#64748b; font-size:16px; line-height:24px; font-style:italic;">
+                  "{{ $article->excerpt }}"
+                </p>
+              </div>
+            @endif
+          @endif
 
-            <p class="text" style="margin:0; color:#475569; font-size:15px; line-height:22px;">
-              {{ $lang === 'en'
-                  ? 'Use the code below to continue.'
-                  : 'Utilisez le code ci-dessous pour continuer.' }}
-            </p>
-
-            <!-- Big Code -->
-            <div style="margin:18px 0 8px 0; text-align:center;">
-              <div style="display:inline-block; padding:16px 24px; border-radius:14px;
-                background:linear-gradient(180deg, #f8fafc, #eef2f7); border:1px solid #e2e8f0;
-                font-weight:800; font-size:28px; letter-spacing:6px; color:#0f172a; box-shadow:0 6px 20px rgba(15,23,42,0.06);
-                font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;">
-                {{ $code }}
+          <!-- Custom Message Body -->
+          @php
+            $safeBody = nl2br(e($body ?? ''));
+          @endphp
+          @if(!empty($safeBody))
+            <div class="content-padding" style="padding:0 28px 24px 28px;">
+              @if(!empty($article))
+                <div style="background:linear-gradient(90deg, #f1f5f9, #e2e8f0); height:1px; margin-bottom:20px;"></div>
+              @endif
+              
+              <!-- Message Label -->
+              <div style="display:flex; align-items:center; margin-bottom:12px;">
+                <div style="width:20px; height:20px; background:#e0f2fe; border-radius:6px; display:flex; align-items:center; justify-content:center; margin-right:8px;">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color:#0284c7;">
+                    <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+                  </svg>
+                </div>
+                <span style="color:#64748b; font-size:13px; font-weight:600; text-transform:uppercase; letter-spacing:0.05em;">Message personnel</span>
+              </div>
+              
+              <div style="background:#f8fafc; border-left:4px solid #0ea5e9; padding:16px 20px; border-radius:0 12px 12px 0;">
+                <div class="text" style="font-size:15px; line-height:22px; color:#374151;">{!! $safeBody !!}</div>
               </div>
             </div>
+          @endif
 
-            <p class="text" style="margin:6px 0 0 0; color:#64748b; font-size:13px; line-height:20px; text-align:center;">
-              {{ $ttlText ?? '' }}
-            </p>
-
-            <!-- Divider -->
-            <div style="background:linear-gradient(90deg, #f1f5f9, #e2e8f0); height:1px; margin:20px 0;"></div>
-
-            <!-- Optional CTA -->
-            @if(!empty($ctaUrl))
-              <div style="text-align:center; margin-bottom:8px;">
+          <!-- Call to Action -->
+          @php
+            $ctaUrl = $url ?? ($article->getUrl() ?? null);
+          @endphp
+          @if(!empty($ctaUrl))
+            <div class="content-padding" style="padding:8px 28px 32px 28px;">
+              <!-- CTA Button -->
+              <div style="text-align:center; margin-bottom:16px;">
                 <a href="{{ $ctaUrl }}" target="_blank" rel="noreferrer" class="cta-button"
-                   style="display:inline-block; padding:14px 28px; background:linear-gradient(135deg, #2563eb, #1d4ed8); color:#ffffff; text-decoration:none; border-radius:12px; font-weight:600; font-size:15px; box-shadow:0 4px 12px rgba(37,99,235,0.3); transition:all 0.2s ease; letter-spacing:0.01em;">
-                  {{ $lang === 'en' ? 'Open ' . ($appName ?? 'the app') : 'Ouvrir ' . ($appName ?? "l'application") }}
+                   style="display:inline-block; padding:16px 32px; background:linear-gradient(135deg, #2563eb, #1d4ed8); color:#ffffff; text-decoration:none; border-radius:12px; font-weight:600; font-size:15px; box-shadow:0 4px 12px rgba(37,99,235,0.3); transition:all 0.2s ease; letter-spacing:0.01em;">
+                  📖 Lire l'article complet
                 </a>
               </div>
-
-              <div style="text-align:center; padding:10px; background:#f8fafc; border-radius:12px; border:1px dashed #cbd5e1;">
-                <div style="font-size:12px; color:#64748b; margin-bottom:4px;">
-                  {{ $lang === 'en' ? 'Or copy this link:' : 'Ou copiez ce lien :' }}
-                </div>
+              
+              <!-- Fallback Link -->
+              <div style="text-align:center; padding:12px; background:#f8fafc; border-radius:12px; border:1px dashed #cbd5e1;">
+                <div style="font-size:12px; color:#64748b; margin-bottom:4px;">Lien direct :</div>
                 <a href="{{ $ctaUrl }}" target="_blank" rel="noreferrer" 
                    style="color:#2563eb; font-size:13px; word-break:break-all; font-family:ui-monospace, 'SF Mono', Consolas, monospace;">
                   {{ $ctaUrl }}
                 </a>
               </div>
-            @endif
-
-            <!-- Safety note -->
-            <div style="margin-top:16px; background:#fff7ed; border:1px solid #fed7aa; color:#9a3412; padding:12px 14px; border-radius:12px;">
-              <div style="font-size:13px; line-height:20px;">
-                {{ $lang === 'en'
-                    ? "If you didn't request this code, you can safely ignore this email."
-                    : "Si vous n'êtes pas à l'origine de cette demande, vous pouvez ignorer cet e-mail." }}
-              </div>
             </div>
-          </div>
+          @endif
+
         </div>
 
         <!-- Footer -->
         <div class="footer" style="background:#ffffff; margin-top:20px; padding:20px 28px; border-radius:16px; border:1px solid #e2e8f0; text-align:center;">
           <div class="footer-text" style="color:#64748b; font-size:13px; line-height:18px;">
             <div style="margin-bottom:8px;">
-              📧 {{ $lang === 'en' ? 'This email was sent by' : 'Cet e-mail vous a été envoyé par' }}
-              <strong>{{ $appName ?? config('app.name') }}</strong>
+              📧 Cet email vous a été envoyé via notre système de partage
+              @if(!empty($article))
+                <span style="color:#94a3b8;">(Réf. #{{ $article->id }})</span>
+              @endif
             </div>
-            @if(!empty($supportMail))
-              <div style="color:#94a3b8; font-size:12px;">
-                {{ $lang === 'en' ? 'Support:' : 'Support :' }} {{ $supportMail }}
-              </div>
-            @endif
-            <div style="color:#94a3b8; font-size:12px; margin-top:6px;">
-              &copy; {{ date('Y') }} {{ $appName ?? config('app.name') }} — {{ $lang === 'en' ? 'All rights reserved' : 'Tous droits réservés' }}
+            <div style="color:#94a3b8; font-size:12px;">
+              &copy; {{ date('Y') }} {{ config('app.name') }} — Tous droits réservés
             </div>
           </div>
         </div>

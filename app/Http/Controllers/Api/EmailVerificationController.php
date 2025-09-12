@@ -12,12 +12,12 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Mail;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Str;
 
 class EmailVerificationController extends Controller
-
-    {
+{
     private const CODE_TTL_MIN        = 10;   // validité du code (minutes)
     private const RESEND_COOLDOWN_SEC = 60;   // délai mini entre 2 envois (secondes)
     private const MAX_VERIFY_ATTEMPTS = 5;    // tentatives max avant reset
@@ -94,13 +94,24 @@ class EmailVerificationController extends Controller
             ? 'Ce code est valable ' . self::CODE_TTL_MIN . ' minutes.'
             : 'This code is valid for ' . self::CODE_TTL_MIN . ' minutes.';
 
-        $lines = $lang === 'fr'
-            ? ["Bonjour,", "", "Voici votre code de vérification : {$code}", $ttlTxt, "", "Si vous n'êtes pas à l'origine de cette demande, ignorez ce message."]
-            : ["Hello,", "", "Here is your verification code: {$code}", $ttlTxt, "", "If you didn't request this, please ignore this email."];
+        // Données pour la vue Blade
+        $viewData = [
+            'lang'        => $lang,
+            'code'        => $code,
+            'ttlMinutes'  => self::CODE_TTL_MIN,
+            'ttlText'     => $ttlTxt,
+            'email'       => $email,
+            'intent'      => $intent,
+            'now'         => now(),
+            'appName'     => config('app.name'),
+            // Lien de CTA optionnel (page de connexion par ex.)
+            'ctaUrl'      => config('app.url'),
+            'supportMail' => config('mail.from.address'),
+        ];
 
         try {
-            // Envoi synchro (pas de queue) pour éviter les confusions en dev
-            Mail::raw(implode("\n", $lines), function ($m) use ($email, $subject) {
+            // Envoi HTML via Blade (au lieu de Mail::raw)
+            Mail::send('emails.otp', $viewData, function ($m) use ($email, $subject) {
                 $m->to($email)->subject($subject);
             });
         } catch (\Throwable $e) {
@@ -191,7 +202,7 @@ class EmailVerificationController extends Controller
         ], 200);
     }
 
-    private function otpKey(string $email): string       { return 'otp:verify:'   . md5(Str::lower($email)); }
-    private function cooldownKey(string $email): string  { return 'otp:cooldown:' . md5(Str::lower($email)); }
+    private function otpKey(string $email): string          { return 'otp:verify:'   . md5(Str::lower($email)); }
+    private function cooldownKey(string $email): string     { return 'otp:cooldown:' . md5(Str::lower($email)); }
     private function verifiedFlagKey(string $email): string { return 'otp:verified:' . md5(Str::lower($email)); }
 }
