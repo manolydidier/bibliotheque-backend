@@ -11,6 +11,12 @@ use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Http\Request;
 
+use App\Models\Comment;
+use App\Observers\CommentObserver;
+
+use App\Models\ArticleShare;
+use App\Observers\ArticleShareObserver;
+
 class AppServiceProvider extends ServiceProvider
 {
     /**
@@ -61,5 +67,8 @@ class AppServiceProvider extends ServiceProvider
             ];
         });
         // -------------------------------------------------------------
+
+         Comment::observe(CommentObserver::class);
+         ArticleShare::observe(ArticleShareObserver::class);
     }
 }

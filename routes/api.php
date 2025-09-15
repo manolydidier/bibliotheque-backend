@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\Api\ArticleController;
+use App\Http\Controllers\Api\ArticleRatingController;
 use App\Http\Controllers\Api\ArticleTagController;
 use App\Http\Controllers\Api\EmailVerificationController;
 use App\Http\Controllers\Auth\PasswordController;
@@ -206,6 +207,22 @@ Route::post('/share', [ShareController::class, 'store'])->name('shares.store');
 Route::post('/share/{share}/convert', [ShareController::class, 'convert'])->name('shares.convert');
 
 Route::get('/share/ping', [ShareController::class, 'ping'])->name('shares.ping');
+
+// ========================================
+// MODULE RATING OU NOTES DES ARTICLES
+// ========================================
+
+
+Route::middleware('throttle:30,1')->group(function () {
+    Route::get   ('/articles/{article}/ratings',  [ArticleRatingController::class, 'show']);
+    Route::post  ('/articles/{article}/ratings',  [ArticleRatingController::class, 'store']);
+    Route::put   ('/articles/{article}/ratings',  [ArticleRatingController::class, 'update']);
+    Route::patch ('/articles/{article}/ratings',  [ArticleRatingController::class, 'update']);
+    Route::delete('/articles/{article}/ratings',  [ArticleRatingController::class, 'destroy']);
+
+    // (optionnel) votes d’utilité d’un avis existant
+    Route::post('/articles/{article}/ratings/{rating}/vote', [ArticleRatingController::class, 'voteHelpful']);
+});
 
 // ========================================
 // MODULE ARTICLES - API ROUTES
