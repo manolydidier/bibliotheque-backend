@@ -20,6 +20,32 @@ class CategoryController extends Controller
         $categories = Category::orderBy('name')->get();
         return response()->json($categories);
     }
+
+
+    public function index2(Request $request): JsonResponse
+    {
+         $q = trim((string) $request->get('q', ''));
+        $perPage = (int) $request->get('per_page', 5);
+        $perPage = $perPage > 0 ? $perPage : 10;
+
+        $query = Category::query()
+            ->when($q !== '', function ($r) use ($q) {
+                $like = '%' . str_replace(['%', '_'], ['\%', '\_'], $q) . '%';
+                $r->where(function ($q2) use ($like) {
+                    $q2->where('name', 'like', $like)
+                       ->orWhere('description', 'like', $like);
+                });
+            })
+            // tri stable & déterministe pour éviter les doublons entre pages
+            ->orderBy('name', 'asc')
+            ->orderBy('id', 'asc')
+            ->select('categories.*')
+            ->distinct();
+
+        $categories = $query->paginate($perPage);
+
+        return response()->json($categories);
+    }
  
     /**
      * Crée une nouvelle catégorie.

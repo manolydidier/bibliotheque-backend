@@ -9,7 +9,7 @@ use App\Models\User;
 use Illuminate\Database\Eloquent\Factories\Factory;
 use Illuminate\Support\Str;
 
-class ArticleFactory extends Factory
+class ArticleMediaFactory extends Factory
 {
     protected $model = Article::class;
 
