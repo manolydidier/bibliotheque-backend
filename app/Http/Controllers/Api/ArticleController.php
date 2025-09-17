@@ -9,6 +9,8 @@ use Illuminate\Http\JsonResponse;
 use App\Models\Article;
 use Illuminate\Support\Facades\DB;          // ✅ CORRECT
 use Illuminate\Support\Facades\Schema;     // (pour sécuriser les facettes)
+use Illuminate\Support\Facades\Hash;       // ✅ pour comparer hash/password
+use App\Enums\ArticleVisibility;           // ✅ enum de visibilité
 
 class ArticleController extends Controller
 {
@@ -54,6 +56,10 @@ class ArticleController extends Controller
             // Facettes
             'include_facets' => 'nullable|boolean',
             'facet_fields'   => 'nullable|string',
+
+            // ✅ Visibilité & masquage
+            'visibility'     => 'nullable|string|in:public,private,password_protected',
+            'hide_locked'    => 'nullable|boolean',
         ]);
 
         // --- Helpers ---
@@ -134,6 +140,11 @@ class ArticleController extends Controller
                      $q->whereNull($articleTable.'.expires_at')
                        ->orWhere($articleTable.'.expires_at', '>', now());
                  });
+        }
+
+        // ✅ Visibilité (optionnel)
+        if (!empty($validated['visibility'])) {
+            $base->where($articleTable.'.visibility', $validated['visibility']);
         }
 
         // Dates
@@ -230,28 +241,57 @@ class ArticleController extends Controller
         $perPage   = (int) ($validated['per_page'] ?? 15);
         $paginator = $base->paginate($perPage)->appends($request->query());
 
-        // 🔁 Normalisation des métriques pour chaque item (sans retirer votre logique existante)
-        // - Garantit la présence de: share_count, comment_count, rating_average
-        // - Sans écraser vos colonnes persistées si elles existent déjà
+        // 🔁 Normalisation des métriques + verrouillage
+        $hideLocked = $request->boolean('hide_locked');
         $paginator->setCollection(
-            $paginator->getCollection()->map(function ($item) {
-                // comment_count: si absent, on reprend approved_comments_count (ou comments_count)
-                if ($item->getAttribute('comment_count') === null) {
-                    if ($item->getAttribute('approved_comments_count') !== null) {
-                        $item->setAttribute('comment_count', (int) $item->getAttribute('approved_comments_count'));
-                    } elseif ($item->getAttribute('comments_count') !== null) {
-                        $item->setAttribute('comment_count', (int) $item->getAttribute('comments_count'));
+            $paginator->getCollection()
+                ->filter(function ($item) use ($hideLocked) {
+                    if (!$hideLocked) return true;
+
+                    // Normaliser visibility (enum ou string)
+                    $vis = $item->visibility instanceof \BackedEnum
+                        ? $item->visibility->value
+                        : (string)$item->visibility;
+
+                    return !in_array($vis, [
+                        ArticleVisibility::PRIVATE->value,
+                        ArticleVisibility::PASSWORD_PROTECTED->value
+                    ], true);
+                })
+                ->map(function ($item) {
+                    // comment_count
+                    if ($item->getAttribute('comment_count') === null) {
+                        if ($item->getAttribute('approved_comments_count') !== null) {
+                            $item->setAttribute('comment_count', (int) $item->getAttribute('approved_comments_count'));
+                        } elseif ($item->getAttribute('comments_count') !== null) {
+                            $item->setAttribute('comment_count', (int) $item->getAttribute('comments_count'));
+                        }
                     }
-                }
+                    // rating_average
+                    if ($item->getAttribute('rating_average') === null && $item->getAttribute('ratings_avg_rating') !== null) {
+                        $item->setAttribute('rating_average', (float) $item->getAttribute('ratings_avg_rating'));
+                    }
 
-                // rating_average: si absent, on remonte la valeur calculée par withAvg (ratings_avg_rating)
-                if ($item->getAttribute('rating_average') === null && $item->getAttribute('ratings_avg_rating') !== null) {
-                    $item->setAttribute('rating_average', (float) $item->getAttribute('ratings_avg_rating'));
-                }
+                    // ✅ Indicateur de verrouillage pour l’index
+                    $vis = $item->visibility instanceof \BackedEnum
+                        ? $item->visibility->value
+                        : (string)$item->visibility;
 
-                // share_count est déjà aliasé via withCount('shares as share_count')
-                return $item;
-            })
+                    $isPrivate = ($vis === ArticleVisibility::PRIVATE->value);
+                    $isPwd     = ($vis === ArticleVisibility::PASSWORD_PROTECTED->value);
+                    $locked    = $isPrivate || $isPwd;
+
+                    $item->setAttribute('locked', $locked);
+                    $item->setAttribute('reason', $locked ? ($isPrivate ? 'private' : 'password_required') : null);
+
+                    // ✅ Ne jamais exposer password ni content si verrouillé
+                    if ($locked) {
+                        $item->setAttribute('content', null);
+                    }
+                    $item->makeHidden(['password']);
+
+                    return $item;
+                })
         );
 
         // Facettes (robuste)
@@ -321,12 +361,14 @@ class ArticleController extends Controller
                 'filters'             => [
                     'search'      => $validated['search']      ?? null,
                     'status'      => $validated['status']      ?? 'published',
+                    'visibility'  => $validated['visibility']  ?? null,
                     'date_from'   => $validated['date_from']   ?? null,
                     'date_to'     => $validated['date_to']     ?? null,
                     'rating_min'  => $validated['rating_min']  ?? null,
                     'rating_max'  => $validated['rating_max']  ?? null,
                     'featured'    => array_key_exists('featured', $validated) ? (bool)$validated['featured'] : null,
                     'sticky'      => array_key_exists('sticky', $validated)   ? (bool)$validated['sticky']   : null,
+                    'hide_locked' => $validated['hide_locked'] ?? null,
                 ],
                 'sort'                => $validated['sort'] ?? null,
                 'sort_by'             => $validated['sort_by'] ?? 'published_at',
@@ -342,6 +384,9 @@ class ArticleController extends Controller
         ]);
     }
 
+/* =========================================================
+     * SHOW (lit aussi le header X-Article-Password)
+     * ========================================================= */
     public function show(Request $request, string $idOrSlug): JsonResponse
     {
         $validated = $request->validate([
@@ -352,8 +397,8 @@ class ArticleController extends Controller
             'increment_view' => 'nullable|boolean',
         ]);
 
-        $csv = fn($v) => collect(is_array($v) ? $v : explode(',', (string)$v))
-            ->map(fn($x) => trim((string)$x))
+        $csv = fn($v) => collect(is_array($v) ? $v : explode(',', (string) $v))
+            ->map(fn($x) => trim((string) $x))
             ->filter()
             ->values();
 
@@ -378,10 +423,9 @@ class ArticleController extends Controller
             $sel = array_values(array_intersect($allowedColumns, $requested));
             if ($sel) $select = $sel;
         }
-        // ⚠️ retire la colonne persistée share_count (on renvoie l'alias calculé)
         $select = array_values(array_diff($select, ['share_count']));
 
-        $requiredForPolicies = ['id','status','published_at','expires_at','password','slug','view_count'];
+        $requiredForPolicies = ['id','status','published_at','expires_at','password','slug','view_count','visibility'];
         $select = array_values(array_unique(array_merge($select, $requiredForPolicies)));
 
         $relationsAllowed = [
@@ -417,11 +461,10 @@ class ArticleController extends Controller
                 });
         }
 
-        // Ciblage ID OU slug (y compris slug numérique)
         $isNumeric = ctype_digit($idOrSlug);
         if ($isNumeric) {
             $base->where(function ($q) use ($articleTable, $idOrSlug) {
-                $q->where($articleTable.'.id', (int)$idOrSlug)
+                $q->where($articleTable.'.id', (int) $idOrSlug)
                   ->orWhere($articleTable.'.slug', $idOrSlug);
             });
         } else {
@@ -430,13 +473,53 @@ class ArticleController extends Controller
 
         $article = $base->firstOrFail();
 
-        // Password
-        $providedPassword = $validated['password'] ?? null;
-        if (!empty($article->password) && $article->password !== $providedPassword) {
-            return response()->json(['message' => 'Password required or incorrect.'], 403);
+        // ----- Contrôle d'accès -----
+        // 🔑 support du header X-Article-Password en plus de ?password=
+        $providedPassword = $validated['password'] ?? $request->header('X-Article-Password');
+
+        $vis = $article->visibility instanceof \BackedEnum
+            ? $article->visibility->value
+            : (string) $article->visibility;
+
+        $isPrivate = ($vis === ArticleVisibility::PRIVATE->value);
+        $isPwd     = ($vis === ArticleVisibility::PASSWORD_PROTECTED->value);
+
+        if ($isPrivate) {
+            return response()->json([
+                'message'    => 'This article is private.',
+                'code'       => 'private',
+                'visibility' => ArticleVisibility::PRIVATE->value,
+            ], 403);
         }
 
-        // Vues (via service + dédup simple)
+        if ($isPwd) {
+            if ($providedPassword === null || $providedPassword === '') {
+                return response()->json([
+                    'message'    => 'Password required or incorrect.',
+                    'code'       => 'password_required',
+                    'visibility' => ArticleVisibility::PASSWORD_PROTECTED->value,
+                ], 403);
+            }
+
+            $stored = (string) $article->password;
+            $looksHashed = str_starts_with($stored, '$2y$')
+                        || str_starts_with($stored, '$argon2i$')
+                        || str_starts_with($stored, '$argon2id$');
+
+            $ok = $looksHashed
+                ? Hash::check($providedPassword, $stored)
+                : hash_equals($stored, $providedPassword);
+
+            if (!$ok) {
+                return response()->json([
+                    'message'    => 'Password required or incorrect.',
+                    'code'       => 'password_incorrect',
+                    'visibility' => ArticleVisibility::PASSWORD_PROTECTED->value,
+                ], 403);
+            }
+        }
+
+        // vues (idempotent léger)
         $viewIncremented = false;
         if ($request->boolean('increment_view')) {
             $dedupeKey = sha1(($request->ip() ?? '0.0.0.0').'|'.($request->userAgent() ?? 'ua'));
@@ -447,7 +530,7 @@ class ArticleController extends Controller
             }
         }
 
-        // 🔁 Normalisation des métriques (sans enlever vos attributs existants)
+        // normalisation métriques
         if ($article->getAttribute('comment_count') === null) {
             if ($article->getAttribute('approved_comments_count') !== null) {
                 $article->setAttribute('comment_count', (int) $article->getAttribute('approved_comments_count'));
@@ -458,8 +541,9 @@ class ArticleController extends Controller
         if ($article->getAttribute('rating_average') === null && $article->getAttribute('ratings_avg_rating') !== null) {
             $article->setAttribute('rating_average', (float) $article->getAttribute('ratings_avg_rating'));
         }
-        // share_count déjà fourni (alias withCount)
 
+        $article->setAttribute('locked', false);
+        $article->setAttribute('reason', null);
         $article->makeHidden(['password']);
 
         return response()->json([
@@ -470,6 +554,61 @@ class ArticleController extends Controller
                     'status' => $validated['status'] ?? 'published',
                 ],
                 'view_incremented' => $viewIncremented,
+            ],
+        ]);
+    }
+
+    /* =========================================================
+     * UNLOCK (POST /articles/{idOrSlug}/unlock)
+     * ========================================================= */
+    public function unlock(Request $request, string $idOrSlug): JsonResponse
+    {
+        $validated = $request->validate([
+            'password' => 'required|string|max:255',
+            'include'  => 'nullable|string',
+            'fields'   => 'nullable|string',
+        ]);
+
+        // On réutilise show() mais en forçant le password depuis le body
+        // et en permettant include/fields
+        $request->merge([
+            'password' => $validated['password'],
+            'include'  => $validated['include'] ?? $request->get('include'),
+            'fields'   => $validated['fields']  ?? $request->get('fields'),
+        ]);
+
+        return $this->show($request, $idOrSlug);
+    }
+
+    /* =========================================================
+     * RÉSUMÉ NOTES (utilisé par ton Visualiseur)
+     * ========================================================= */
+    public function ratingsSummary(Request $request, string $id): JsonResponse
+    {
+        $article = Article::query()->findOrFail($id);
+
+        $avg = (float) ($article->ratings()->avg('rating') ?? 0);
+        $cnt = (int)   ($article->ratings()->count() ?? 0);
+
+        $myRating = null;
+        $myReview = null;
+
+        // Si tu utilises Sanctum/JWT, adapte ce bloc :
+        $user = $request->user(); // ou $request->user('sanctum')
+        if ($user) {
+            $mine = $article->ratings()->where('user_id', $user->id)->first();
+            if ($mine) {
+                $myRating = (int) $mine->rating;
+                $myReview = (string) ($mine->review ?? '');
+            }
+        }
+
+        return response()->json([
+            'data' => [
+                'rating_average' => $avg,
+                'rating_count'   => $cnt,
+                'my_rating'      => $myRating,
+                'my_review'      => $myReview,
             ],
         ]);
     }
