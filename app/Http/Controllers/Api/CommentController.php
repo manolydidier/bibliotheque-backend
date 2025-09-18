@@ -19,26 +19,13 @@ class CommentController extends Controller
         if (!$user) return false;
 
         $keys = [
-            'commentspermissions.moderator',
-            'comments.moderator',
-            'comments.moderate',
-            'moderate comments',
-            'moderator',
-            'moderateur',
-            'permissions.moderator',
-            'manager',
-            'admin',
-            'administrator',
-            'super admin',
-            'superadmin',
-            'super-administrator',
-            'super-administrator',
-           'approuve comments',
-           'approuver comments',
-              'approuver commentaires',
-              'gerer'
+            'commentspermissions.moderator','comments.moderator','comments.moderate',
+            'moderate comments','moderator','moderateur','permissions.moderator',
+            'manager','admin','administrator','super admin','superadmin','super-administrator',
+            'approuve comments','approuver comments','approuver commentaires','gerer'
         ];
 
+        // 1) via relation Eloquent (si dispo)
         try {
             if (method_exists($user, 'permissions')) {
                 $perms = collect($user->permissions() ?? []);
@@ -52,10 +39,9 @@ class CommentController extends Controller
                     if ($haystack->contains(mb_strtolower($k))) return true;
                 }
             }
-        } catch (\Throwable $e) {
-            // ignore
-        }
+        } catch (\Throwable $e) {}
 
+        // 2) via tables pivot
         try {
             $hasSlug = Schema::hasColumn('permissions', 'slug');
 
@@ -74,157 +60,193 @@ class CommentController extends Controller
         }
     }
 
+    /** Règle stricte d'édition de contenu pour l’auteur */
+    private function authorCanEditContent(?\App\Models\User $user, Comment $comment): bool
+    {
+        if (!$user) return false;
+        if ((int)$comment->user_id !== (int)$user->id) return false;
+
+        // ✳️ Interdiction si approuvé / rejeté / spam
+        if ($comment->isApproved() || $comment->isRejected() || $comment->isSpam()) return false;
+
+        // ✳️ Interdiction s'il y a au moins une réponse
+        $hasReplies = (int)$comment->reply_count > 0
+            || Comment::query()->where('parent_id', $comment->id)->exists();
+        if ($hasReplies) return false;
+
+        return true;
+    }
+
     /**
      * GET /api/comments
      * Filtres: status, article_id, parent_id ("null" pour racine), user_id, featured, tenant_id
      */
-    public function index(Request $request): JsonResponse
-    {
-        $query = Comment::query()
-            ->with([
-                'user:id,username,email,first_name,last_name,avatar_url',
-                'parent:id',
-                'article:id,title',
-            ])
-            ->when($request->filled('tenant_id'), fn ($q) => $q->where('tenant_id', (int) $request->get('tenant_id')))
-            ->when($request->filled('article_id'), fn ($q) => $q->where('article_id', (int) $request->get('article_id')))
-            ->when($request->filled('user_id'), fn ($q) => $q->where('user_id', (int) $request->get('user_id')))
-            ->when($request->filled('featured'), fn ($q) => $q->where('is_featured', filter_var($request->get('featured'), FILTER_VALIDATE_BOOL)))
-            ->when($request->filled('parent_id'), fn ($q) => $q->where('parent_id', $request->get('parent_id')));
+  public function index(Request $request): JsonResponse
+{
+    $query = Comment::query()
+        ->with([
+            'user:id,username,email,first_name,last_name,avatar_url,updated_at',
+            'parent:id',
+            'article:id,title',
+        ])
+        ->when($request->filled('tenant_id'), fn ($q) => $q->where('tenant_id', (int) $request->get('tenant_id')))
+        ->when($request->filled('article_id'), fn ($q) => $q->where('article_id', (int) $request->get('article_id')))
+        ->when($request->filled('user_id'), fn ($q) => $q->where('user_id', (int) $request->get('user_id')))
+        ->when($request->filled('featured'), fn ($q) => $q->where('is_featured', filter_var($request->get('featured'), FILTER_VALIDATE_BOOL)))
+        ->when($request->filled('parent_id'), fn ($q) => $q->where('parent_id', $request->get('parent_id')));
 
-        if ($request->get('parent_id') === 'null') {
-            $query->whereNull('parent_id');
-        }
-
-        $user = $request->user();
-        $isModerator = $this->userIsModerator($user);
-
-        if (!$request->filled('status')) {
-            if (!$isModerator) {
-                $query->where(function ($q) use ($user) {
-                    $q->where('status', 'approved');
-                    if ($user) {
-                        $q->orWhere(fn ($qq) => $qq->where('status', 'pending')->where('user_id', $user->id));
-                    }
-                });
-            }
-        } else {
-            $query->whereIn('status', (array) $request->get('status'));
-        }
-
-        if ($request->boolean('with_trashed')) $query->withTrashed();
-        if ($request->boolean('only_trashed')) $query->onlyTrashed();
-
-        $query->orderByDesc('is_featured')->orderBy('created_at', 'asc');
-
-        $perPage = min(max((int) $request->get('per_page', 20), 1), 100);
-        $paginated = $query->paginate($perPage);
-
-        return response()->json($paginated->toArray());
+    if ($request->get('parent_id') === 'null') {
+        $query->whereNull('parent_id');
     }
 
+    $user = $request->user();
+    $isModerator = $this->userIsModerator($user);
+
+    if (!$request->filled('status')) {
+        if (!$isModerator) {
+            $query->where(function ($q) use ($user) {
+                $q->where('status', 'approved');
+                if ($user) {
+                    $q->orWhere(fn ($qq) => $qq->where('status', 'pending')->where('user_id', $user->id));
+                }
+            });
+        }
+    } else {
+        $query->whereIn('status', (array) $request->get('status'));
+    }
+
+    if ($request->boolean('with_trashed')) $query->withTrashed();
+    if ($request->boolean('only_trashed')) $query->onlyTrashed();
+
+    // -------- TRI ----------
+    $sort = strtolower((string) $request->get('sort', 'newest'));
+    $featuredFirst = $request->boolean('featured_first', true);
+    if (!in_array($sort, ['newest', 'oldest'], true)) $sort = 'newest';
+
+    if ($featuredFirst) {
+        $query->orderByDesc('is_featured');
+    }
+    $query->orderBy('created_at', $sort === 'newest' ? 'desc' : 'asc');
+
+    $perPage = min(max((int) $request->get('per_page', 20), 1), 100);
+    $paginated = $query->paginate($perPage);
+
+    return response()->json($paginated->toArray());
+}
+
     /**
-     * ✅ GET /api/comments/{article}
+     * GET /api/comments/{article}
      * Liste paginée des commentaires RACINE d’un article
-     * (utilise parent_id=null pour ne pas ramener les réponses ici)
      */
     public function show(Request $request, int $article): JsonResponse
-    {
-        $query = Comment::query()
-            ->with([
-                'user:id,username,email,first_name,last_name,avatar_url',
-                'parent:id',
-                'article:id,title',
-            ])
-            ->where('article_id', $article);
+{
+    $query = Comment::query()
+        ->with([
+            'user:id,username,email,first_name,last_name,avatar_url,updated_at',
+            'parent:id',
+            'article:id,title',
+        ])
+        ->where('article_id', $article);
 
-        // Seulement racine par défaut
-        if ($request->get('parent_id') === 'null' || !$request->filled('parent_id')) {
-            $query->whereNull('parent_id');
-        } else {
-            $query->where('parent_id', $request->get('parent_id'));
-        }
-
-        $user = $request->user();
-        $isModerator = $this->userIsModerator($user);
-
-        if (!$request->filled('status')) {
-            if (!$isModerator) {
-                $query->where(function ($q) use ($user) {
-                    $q->where('status', 'approved');
-                    if ($user) {
-                        $q->orWhere(fn ($qq) => $qq->where('status', 'pending')->where('user_id', $user->id));
-                    }
-                });
-            }
-        } else {
-            $query->whereIn('status', (array) $request->get('status'));
-        }
-
-        if ($request->boolean('with_trashed')) $query->withTrashed();
-        if ($request->boolean('only_trashed')) $query->onlyTrashed();
-
-        $query->orderByDesc('is_featured')->orderBy('created_at', 'asc');
-
-        $perPage  = min(max((int) $request->get('per_page', 20), 1), 100);
-        $paginated = $query->paginate($perPage);
-
-        return response()->json($paginated->toArray());
+    // Seulement racine par défaut
+    if ($request->get('parent_id') === 'null' || !$request->filled('parent_id')) {
+        $query->whereNull('parent_id');
+    } else {
+        $query->where('parent_id', $request->get('parent_id'));
     }
 
-    /**
-     * ✅ GET /api/comments/{comment}/replies
-     * Liste paginée des réponses d’un commentaire (par défaut 3 par page)
-     */
-    public function replies(Request $request, Comment $comment): JsonResponse
-    {
-        $query = Comment::query()
-            ->with([
-                'user:id,username,email,first_name,last_name,avatar_url',
-                'parent:id',
-                'article:id,title',
-            ])
-            ->where('parent_id', $comment->id);
+    $user = $request->user();
+    $isModerator = $this->userIsModerator($user);
 
-        $user = $request->user();
-        $isModerator = $this->userIsModerator($user);
-
-        if (!$request->filled('status')) {
-            if (!$isModerator) {
-                $query->where(function ($q) use ($user) {
-                    $q->where('status', 'approved');
-                    if ($user) {
-                        $q->orWhere(fn ($qq) => $qq->where('status', 'pending')->where('user_id', $user->id));
-                    }
-                });
-            }
-        } else {
-            $query->whereIn('status', (array) $request->get('status'));
+    if (!$request->filled('status')) {
+        if (!$isModerator) {
+            $query->where(function ($q) use ($user) {
+                $q->where('status', 'approved');
+                if ($user) {
+                    $q->orWhere(fn ($qq) => $qq->where('status', 'pending')->where('user_id', $user->id));
+                }
+            });
         }
-
-        if ($request->boolean('with_trashed')) $query->withTrashed();
-        if ($request->boolean('only_trashed')) $query->onlyTrashed();
-
-        $query->orderBy('created_at', 'asc');
-
-        $perPage = min(max((int) $request->get('per_page', 3), 1), 50);
-        $paginated = $query->paginate($perPage);
-
-        return response()->json($paginated->toArray());
+    } else {
+        $query->whereIn('status', (array) $request->get('status'));
     }
 
+    if ($request->boolean('with_trashed')) $query->withTrashed();
+    if ($request->boolean('only_trashed')) $query->onlyTrashed();
+
+    // -------- TRI ----------
+    $sort = strtolower((string) $request->get('sort', 'newest'));
+    $featuredFirst = $request->boolean('featured_first', true);
+    if (!in_array($sort, ['newest', 'oldest'], true)) $sort = 'newest';
+
+    if ($featuredFirst) {
+        $query->orderByDesc('is_featured');
+    }
+    $query->orderBy('created_at', $sort === 'newest' ? 'desc' : 'asc');
+
+    $perPage  = min(max((int) $request->get('per_page', 20), 1), 100);
+    $paginated = $query->paginate($perPage);
+
+    return response()->json($paginated->toArray());
+}
+
     /**
-     * ✅ GET /api/comment/{comment}
-     * Affiche un SEUL commentaire (avec ses relations directes)
+     * GET /api/comments/{comment}/replies
      */
+  public function replies(Request $request, Comment $comment): JsonResponse
+{
+    $query = Comment::query()
+        ->with([
+            'user:id,username,email,first_name,last_name,avatar_url,updated_at',
+            'parent:id',
+            'article:id,title',
+        ])
+        ->where('parent_id', $comment->id);
+
+    $user = $request->user();
+    $isModerator = $this->userIsModerator($user);
+
+    if (!$request->filled('status')) {
+        if (!$isModerator) {
+            $query->where(function ($q) use ($user) {
+                $q->where('status', 'approved');
+                if ($user) {
+                    $q->orWhere(fn ($qq) => $qq->where('status', 'pending')->where('user_id', $user->id));
+                }
+            });
+        }
+    } else {
+        $query->whereIn('status', (array) $request->get('status'));
+    }
+
+    if ($request->boolean('with_trashed')) $query->withTrashed();
+    if ($request->boolean('only_trashed')) $query->onlyTrashed();
+
+    // -------- TRI ----------
+    $sort = strtolower((string) $request->get('sort', 'newest'));           // ← plus récent par défaut
+    $featuredFirst = $request->boolean('featured_first', false);            // ← les réponses n’ont pas besoin d’être "featured"
+    if (!in_array($sort, ['newest', 'oldest'], true)) $sort = 'newest';
+
+    if ($featuredFirst) {
+        $query->orderByDesc('is_featured');
+    }
+    $query->orderBy('created_at', $sort === 'newest' ? 'desc' : 'asc');
+
+    $perPage = min(max((int) $request->get('per_page', 3), 1), 50);
+    $paginated = $query->paginate($perPage);
+
+    return response()->json($paginated->toArray());
+}
+
+    /** GET /api/comment/{comment} */
     public function showOne(Comment $comment): JsonResponse
     {
         return response()->json(
             $comment->load([
-                'user:id,username,email,first_name,last_name,avatar_url',
+                'user:id,username,email,first_name,last_name,avatar_url,updated_at',
                 'parent:id',
                 'article:id,title',
-                'replies', // attention: non paginé ici
+                'replies',
             ])->toArray()
         );
     }
@@ -271,6 +293,7 @@ class CommentController extends Controller
             $data['article_id'] = $parent->article_id;
         }
 
+        // statut par défaut
         if (empty($data['status'])) {
             $data['status'] = $isModerator ? 'approved' : 'pending';
         } elseif (!$isModerator) {
@@ -294,7 +317,7 @@ class CommentController extends Controller
 
         return response()->json(
             $comment->load([
-                'user:id,username,email,first_name,last_name,avatar_url',
+                'user:id,username,email,first_name,last_name,avatar_url,updated_at',
                 'parent:id',
                 'article:id,title',
             ])->toArray(),
@@ -306,7 +329,12 @@ class CommentController extends Controller
     public function update(Request $request, Comment $comment): JsonResponse
     {
         $user = $request->user();
+        if (!$user) {
+            return response()->json(['message' => 'Authentification requise.'], 401);
+        }
+
         $isModerator = $this->userIsModerator($user);
+        $isOwner     = (int)$comment->user_id === (int)$user->id;
 
         $data = $request->validate([
             'content'           => ['sometimes', 'string', 'min:1', 'max:5000'],
@@ -316,39 +344,61 @@ class CommentController extends Controller
             'moderation_notes'  => ['sometimes', 'nullable', 'string', 'max:2000'],
         ]);
 
-        if (!$isModerator) {
-            if (!$comment->canBeEditedBy($user)) {
+        // 1) ÉDITION DE CONTENU — uniquement l’auteur, et règle stricte (pas approved/rejected/spam, pas de réponses)
+        $contentPayload = array_intersect_key($data, array_flip(['content','meta']));
+        if (!empty($contentPayload)) {
+            if (!$this->authorCanEditContent($user, $comment)) {
                 return response()->json(['message' => 'Non autorisé à modifier ce commentaire.'], 403);
-            }
-            $data = array_intersect_key($data, array_flip(['content', 'meta']));
-        } else {
-            if (isset($data['status'])) {
-                $oldApproved = $comment->isApproved();
-
-                if ($data['status'] === 'approved' && !$comment->isApproved()) {
-                    $comment->approve(Auth::user(), $data['moderation_notes'] ?? null);
-                } elseif ($data['status'] === 'rejected' && !$comment->isRejected()) {
-                    $comment->reject(Auth::user(), $data['moderation_notes'] ?? 'Rejeté.');
-                } elseif ($data['status'] === 'spam' && !$comment->isSpam()) {
-                    $comment->markAsSpam(Auth::user(), $data['moderation_notes'] ?? null);
-                }
-                unset($data['status']);
-
-                $comment->refresh()->loadMissing('article');
-                $newApproved = $comment->isApproved();
-                if ($oldApproved && !$newApproved && $comment->article && method_exists($comment->article, 'decrementCommentCount')) {
-                    $comment->article->decrementCommentCount();
-                }
             }
         }
 
-        if (!empty($data)) {
-            $comment->fill($data)->save();
+        // 2) CHANGEMENTS DE STATUT & FEATURE — modérateur uniquement
+        if (isset($data['status']) || isset($data['is_featured'])) {
+            if (!$isModerator) {
+                // un auteur non modérateur ne peut pas changer le statut/feature
+                unset($data['status'], $data['is_featured']);
+            }
+        }
+
+        // appliquer status si modérateur
+        if ($isModerator && isset($data['status'])) {
+            $oldApproved = $comment->isApproved();
+            $to = $data['status'];
+
+            if ($to === 'approved' && !$comment->isApproved()) {
+                $comment->approve(Auth::user(), $data['moderation_notes'] ?? null);
+            } elseif ($to === 'rejected' && !$comment->isRejected()) {
+                $comment->reject(Auth::user(), $data['moderation_notes'] ?? 'Rejeté.');
+            } elseif ($to === 'spam' && !$comment->isSpam()) {
+                $comment->markAsSpam(Auth::user(), $data['moderation_notes'] ?? null);
+            }
+            unset($data['status']);
+
+            $comment->refresh()->loadMissing('article');
+            $newApproved = $comment->isApproved();
+            if ($oldApproved && !$newApproved && $comment->article && method_exists($comment->article, 'decrementCommentCount')) {
+                $comment->article->decrementCommentCount();
+            }
+        }
+
+        // feature si modérateur
+        if ($isModerator && array_key_exists('is_featured', $data)) {
+            $comment->is_featured = (bool)$data['is_featured'];
+            unset($data['is_featured']);
+        }
+
+        // appliquer édition contenu si autorisée
+        if (!empty($contentPayload)) {
+            $comment->fill($contentPayload);
+        }
+
+        if ($comment->isDirty()) {
+            $comment->save();
         }
 
         return response()->json(
             $comment->fresh()->load([
-                'user:id,username,email,first_name,last_name,avatar_url',
+                'user:id,username,email,first_name,last_name,avatar_url,updated_at',
                 'parent:id',
                 'article:id,title',
             ])->toArray()
@@ -390,7 +440,7 @@ class CommentController extends Controller
             $approvedDeletedCount = $comment->isApproved() ? 1 : 0;
 
             if ($isModerator) {
-                // Parcours en largeur pour supprimer tout le sous-arbre
+                // delete sous-arbre
                 $frontier = [$comment->id];
                 while (!empty($frontier)) {
                     $children = Comment::query()
@@ -456,7 +506,7 @@ class CommentController extends Controller
 
         return response()->json(
             $comment->fresh()->load([
-                'user:id,username,email,first_name,last_name,avatar_url',
+                'user:id,username,email,first_name,last_name,avatar_url,updated_at',
                 'parent:id',
                 'article:id,title',
             ])->toArray()

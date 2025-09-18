@@ -21,6 +21,7 @@ use App\Http\Controllers\Api\TagController;
 use App\Http\Controllers\Api\CategoryController;
 use App\Http\Controllers\Api\CommentController;
 use App\Http\Controllers\Api\ShareController;
+use App\Http\Controllers\Api\UserActivityController;
 use Illuminate\Support\Facades\Log;
 
 
@@ -226,6 +227,17 @@ Route::middleware('throttle:30,1')->group(function () {
     // (optionnel) votes d’utilité d’un avis existant
     Route::post('/articles/{article}/ratings/{rating}/vote', [ArticleRatingController::class, 'voteHelpful']);
 });
+
+// ========================================
+// MODULE ACTIVITY USER - API ROUTES
+// ===
+
+Route::middleware('auth:sanctum')->group(function () {
+    Route::get('/users/{user}/activities', [UserActivityController::class, 'index']);
+    Route::get('/me/effective-permissions', [UserActivityController::class, 'me']);
+});
+
+
 
 // ========================================
 // MODULE ARTICLES - API ROUTES
