@@ -25,6 +25,18 @@ class CommentController extends Controller
             'moderate comments',
             'moderator',
             'moderateur',
+            'permissions.moderator',
+            'manager',
+            'admin',
+            'administrator',
+            'super admin',
+            'superadmin',
+            'super-administrator',
+            'super-administrator',
+           'approuve comments',
+           'approuver comments',
+              'approuver commentaires',
+              'gerer'
         ];
 
         try {

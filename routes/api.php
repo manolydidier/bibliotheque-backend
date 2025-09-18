@@ -52,6 +52,7 @@ Route::get('/validate-unique', [AuthController::class, 'validateUnique']);
     Route::post('/auth/{id}/updatepassword', [AuthController::class, 'updatePassword'])->middleware('auth:sanctum');
     Route::get('/user', [AuthController::class, 'showProfile'])->middleware('auth:sanctum');
     Route::post('/user/{id}/edit', [AuthController::class, 'updateProfile'])->middleware('auth:sanctum');
+    Route::get('/user/{id}/profile', [AuthController::class, 'user'])->middleware('auth:sanctum');
     Route::get('/users', [AuthController::class, 'index'])->middleware('auth:sanctum');
    
     Route::delete('users/{id}/delete', [AuthController::class, 'delete'])->middleware('auth:sanctum');
