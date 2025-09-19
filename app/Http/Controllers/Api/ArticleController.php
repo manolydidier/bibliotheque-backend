@@ -9,6 +9,8 @@ use Illuminate\Http\JsonResponse;
 use App\Models\Article;
 use Illuminate\Support\Facades\DB;          // ✅ CORRECT
 use Illuminate\Support\Facades\Schema;     // (pour sécuriser les facettes)
+use Illuminate\Support\Facades\Hash;       // ✅ pour comparer hash/password
+use App\Enums\ArticleVisibility;           // ✅ enum de visibilité
 
 class ArticleController extends Controller
 {
@@ -43,8 +45,8 @@ class ArticleController extends Controller
             'rating_max'     => 'nullable|numeric|min:0|max:5',
 
             // Tri (multi-colonnes)
-            'sort'           => 'nullable|string', // ex: "published_at,desc;view_count,desc"
-            'sort_by'        => 'nullable|string|in:created_at,updated_at,published_at,title,view_count,rating_average',
+            'sort'           => 'nullable|string', // ex: "published_at,desc;share_count,desc"
+            'sort_by'        => 'nullable|string|in:created_at,updated_at,published_at,title,view_count,rating_average,share_count,comment_count',
             'sort_direction' => 'nullable|string|in:asc,desc',
 
             // Sélection & relations
@@ -54,6 +56,10 @@ class ArticleController extends Controller
             // Facettes
             'include_facets' => 'nullable|boolean',
             'facet_fields'   => 'nullable|string',
+
+            // ✅ Visibilité & masquage
+            'visibility'     => 'nullable|string|in:public,private,password_protected',
+            'hide_locked'    => 'nullable|boolean',
         ]);
 
         // --- Helpers ---
@@ -71,7 +77,7 @@ class ArticleController extends Controller
             'featured_image','featured_image_alt','meta','seo_data',
             'status','visibility','password',
             'published_at','scheduled_at','expires_at',
-            'reading_time','word_count','view_count','share_count','comment_count',
+            'reading_time','word_count','view_count',/*'share_count',*/'comment_count',
             'rating_average','rating_count',
             'is_featured','is_sticky','allow_comments','allow_sharing','allow_rating',
             'author_name','author_bio','author_avatar','author_id',
@@ -86,6 +92,8 @@ class ArticleController extends Controller
             $sel = array_values(array_intersect($allowedColumns, $requested));
             if ($sel) $select = $sel;
         }
+        // ⚠️ on retire la colonne persistée share_count pour éviter conflit avec l'alias withCount
+        $select = array_values(array_diff($select, ['share_count']));
 
         // Relations autorisées
         $relationsAllowed = [
@@ -104,7 +112,11 @@ class ArticleController extends Controller
             ->from($articleTable)
             ->select($select)
             ->with($includes)
-            ->withCount(['comments','approvedComments','ratings','shares','history','media','tags','categories'])
+            // ✅ calcul du nombre de partages depuis la table article_shares
+            ->withCount([
+                'shares as share_count' => fn($q) => $q, // filtre status ici si besoin
+                'comments','approvedComments','ratings','history','media','tags','categories'
+            ])
             ->withAvg('ratings', 'rating');
 
         // Texte libre
@@ -128,6 +140,11 @@ class ArticleController extends Controller
                      $q->whereNull($articleTable.'.expires_at')
                        ->orWhere($articleTable.'.expires_at', '>', now());
                  });
+        }
+
+        // ✅ Visibilité (optionnel)
+        if (!empty($validated['visibility'])) {
+            $base->where($articleTable.'.visibility', $validated['visibility']);
         }
 
         // Dates
@@ -194,7 +211,7 @@ class ArticleController extends Controller
         }
 
         // Tri
-        $sortable = ['created_at','updated_at','published_at','title','view_count','rating_average'];
+        $sortable = ['created_at','updated_at','published_at','title','view_count','rating_average','share_count','comment_count'];
         if (!empty($validated['sort'])) {
             foreach ($csv($validated['sort']) as $spec) {
                 [$k, $d] = array_pad(explode(',', $spec, 2), 2, 'asc');
@@ -205,7 +222,7 @@ class ArticleController extends Controller
                     $base->orderBy($articleTable.'.is_sticky','desc')
                          ->orderBy($articleTable.'.is_featured','desc');
                 }
-                $base->orderBy($articleTable.'.'.$k, $d);
+                $base->orderBy($k === 'published_at' ? $articleTable.'.'.$k : $k, $d);
             }
         } else {
             $sortBy        = $validated['sort_by']        ?? 'published_at';
@@ -214,7 +231,7 @@ class ArticleController extends Controller
                 $base->orderBy($articleTable.'.is_sticky','desc')
                      ->orderBy($articleTable.'.is_featured','desc');
             }
-            $base->orderBy($articleTable.'.'.$sortBy, $sortDirection);
+            $base->orderBy(in_array($sortBy, ['published_at']) ? $articleTable.'.'.$sortBy : $sortBy, $sortDirection);
         }
 
         // Clone pour facettes (avant pagination)
@@ -224,7 +241,60 @@ class ArticleController extends Controller
         $perPage   = (int) ($validated['per_page'] ?? 15);
         $paginator = $base->paginate($perPage)->appends($request->query());
 
-        // Facettes (robuste, ne doit jamais planter l’endpoint)
+        // 🔁 Normalisation des métriques + verrouillage
+        $hideLocked = $request->boolean('hide_locked');
+        $paginator->setCollection(
+            $paginator->getCollection()
+                ->filter(function ($item) use ($hideLocked) {
+                    if (!$hideLocked) return true;
+
+                    // Normaliser visibility (enum ou string)
+                    $vis = $item->visibility instanceof \BackedEnum
+                        ? $item->visibility->value
+                        : (string)$item->visibility;
+
+                    return !in_array($vis, [
+                        ArticleVisibility::PRIVATE->value,
+                        ArticleVisibility::PASSWORD_PROTECTED->value
+                    ], true);
+                })
+                ->map(function ($item) {
+                    // comment_count
+                    if ($item->getAttribute('comment_count') === null) {
+                        if ($item->getAttribute('approved_comments_count') !== null) {
+                            $item->setAttribute('comment_count', (int) $item->getAttribute('approved_comments_count'));
+                        } elseif ($item->getAttribute('comments_count') !== null) {
+                            $item->setAttribute('comment_count', (int) $item->getAttribute('comments_count'));
+                        }
+                    }
+                    // rating_average
+                    if ($item->getAttribute('rating_average') === null && $item->getAttribute('ratings_avg_rating') !== null) {
+                        $item->setAttribute('rating_average', (float) $item->getAttribute('ratings_avg_rating'));
+                    }
+
+                    // ✅ Indicateur de verrouillage pour l’index
+                    $vis = $item->visibility instanceof \BackedEnum
+                        ? $item->visibility->value
+                        : (string)$item->visibility;
+
+                    $isPrivate = ($vis === ArticleVisibility::PRIVATE->value);
+                    $isPwd     = ($vis === ArticleVisibility::PASSWORD_PROTECTED->value);
+                    $locked    = $isPrivate || $isPwd;
+
+                    $item->setAttribute('locked', $locked);
+                    $item->setAttribute('reason', $locked ? ($isPrivate ? 'private' : 'password_required') : null);
+
+                    // ✅ Ne jamais exposer password ni content si verrouillé
+                    if ($locked) {
+                        $item->setAttribute('content', null);
+                    }
+                    $item->makeHidden(['password']);
+
+                    return $item;
+                })
+        );
+
+        // Facettes (robuste)
         $facets = null;
         if ($request->boolean('include_facets')) {
             try {
@@ -236,20 +306,20 @@ class ArticleController extends Controller
                 $facets = [];
 
                 if ($filteredIds->isNotEmpty()) {
-                    if (in_array('categories', $fields, true) && Schema::hasTable('categories') && Schema::hasTable('article_category')) {
-                        $facets['categories'] = DB::table('article_category')
+                    if (in_array('categories', $fields, true) && Schema::hasTable('categories') && Schema::hasTable('article_categories')) {
+                        $facets['categories'] = DB::table('article_categories')
                             ->whereIn('article_id', $filteredIds)
-                            ->join('categories','categories.id','=','article_category.category_id')
+                            ->join('categories','categories.id','=','article_categories.category_id')
                             ->select('categories.id','categories.name', DB::raw('COUNT(*) as count'))
                             ->groupBy('categories.id','categories.name')
                             ->orderByDesc('count')
                             ->get();
                     }
 
-                    if (in_array('tags', $fields, true) && Schema::hasTable('tags') && Schema::hasTable('article_tag')) {
-                        $facets['tags'] = DB::table('article_tag')
+                    if (in_array('tags', $fields, true) && Schema::hasTable('tags') && Schema::hasTable('article_tags')) {
+                        $facets['tags'] = DB::table('article_tags')
                             ->whereIn('article_id', $filteredIds)
-                            ->join('tags','tags.id','=','article_tag.tag_id')
+                            ->join('tags','tags.id','=','article_tags.tag_id')
                             ->select('tags.id','tags.name', DB::raw('COUNT(*) as count'))
                             ->groupBy('tags.id','tags.name')
                             ->orderByDesc('count')
@@ -291,12 +361,14 @@ class ArticleController extends Controller
                 'filters'             => [
                     'search'      => $validated['search']      ?? null,
                     'status'      => $validated['status']      ?? 'published',
+                    'visibility'  => $validated['visibility']  ?? null,
                     'date_from'   => $validated['date_from']   ?? null,
                     'date_to'     => $validated['date_to']     ?? null,
                     'rating_min'  => $validated['rating_min']  ?? null,
                     'rating_max'  => $validated['rating_max']  ?? null,
                     'featured'    => array_key_exists('featured', $validated) ? (bool)$validated['featured'] : null,
                     'sticky'      => array_key_exists('sticky', $validated)   ? (bool)$validated['sticky']   : null,
+                    'hide_locked' => $validated['hide_locked'] ?? null,
                 ],
                 'sort'                => $validated['sort'] ?? null,
                 'sort_by'             => $validated['sort_by'] ?? 'published_at',
@@ -312,114 +384,232 @@ class ArticleController extends Controller
         ]);
     }
 
+/* =========================================================
+     * SHOW (lit aussi le header X-Article-Password)
+     * ========================================================= */
     public function show(Request $request, string $idOrSlug): JsonResponse
-{
-    // --- Validation des query params ---
-    $validated = $request->validate([
-        'include'        => 'nullable|string',
-        'fields'         => 'nullable|string',
-        'status'         => 'nullable|string|in:draft,pending,published,archived',
-        'password'       => 'nullable|string|max:255',
-        'increment_view' => 'nullable|boolean',
-    ]);
+    {
+        $validated = $request->validate([
+            'include'        => 'nullable|string',
+            'fields'         => 'nullable|string',
+            'status'         => 'nullable|string|in:draft,pending,published,archived',
+            'password'       => 'nullable|string|max:255',
+            'increment_view' => 'nullable|boolean',
+        ]);
 
-    // --- Helpers ---
-    $csv = fn($v) => collect(is_array($v) ? $v : explode(',', (string)$v))
-        ->map(fn($x) => trim((string)$x))
-        ->filter()
-        ->values();
+        $csv = fn($v) => collect(is_array($v) ? $v : explode(',', (string) $v))
+            ->map(fn($x) => trim((string) $x))
+            ->filter()
+            ->values();
 
-    $articleTable = (new Article())->getTable();
+        $articleTable = (new Article())->getTable();
 
-    $allowedColumns = [
-        'id','tenant_id','title','slug','excerpt','content',
-        'featured_image','featured_image_alt','meta','seo_data',
-        'status','visibility','password',
-        'published_at','scheduled_at','expires_at',
-        'reading_time','word_count','view_count','share_count','comment_count',
-        'rating_average','rating_count',
-        'is_featured','is_sticky','allow_comments','allow_sharing','allow_rating',
-        'author_name','author_bio','author_avatar','author_id',
-        'created_by','updated_by','reviewed_by','reviewed_at','review_notes',
-        'created_at','updated_at','deleted_at',
-    ];
+        $allowedColumns = [
+            'id','tenant_id','title','slug','excerpt','content',
+            'featured_image','featured_image_alt','meta','seo_data',
+            'status','visibility','password',
+            'published_at','scheduled_at','expires_at',
+            'reading_time','word_count','view_count',/*'share_count',*/'comment_count',
+            'rating_average','rating_count',
+            'is_featured','is_sticky','allow_comments','allow_sharing','allow_rating',
+            'author_name','author_bio','author_avatar','author_id',
+            'created_by','updated_by','reviewed_by','reviewed_at','review_notes',
+            'created_at','updated_at','deleted_at',
+        ];
 
-    // Colonnes sélectionnées (on force celles nécessaires aux vérifs métier)
-    $select = $allowedColumns;
-    if (!empty($validated['fields'])) {
-        $requested = $csv($validated['fields'])->all();
-        $sel = array_values(array_intersect($allowedColumns, $requested));
-        if ($sel) $select = $sel;
-    }
-    // Toujours inclure ces colonnes pour la logique interne (sans les exposer si besoin)
-    $requiredForPolicies = ['id','status','published_at','expires_at','password'];
-    $select = array_values(array_unique(array_merge($select, $requiredForPolicies)));
+        $select = $allowedColumns;
+        if (!empty($validated['fields'])) {
+            $requested = $csv($validated['fields'])->all();
+            $sel = array_values(array_intersect($allowedColumns, $requested));
+            if ($sel) $select = $sel;
+        }
+        $select = array_values(array_diff($select, ['share_count']));
 
-    // Relations autorisées
-    $relationsAllowed = [
-        'categories','tags','media','comments','approvedComments','ratings','shares','history',
-        'author','createdBy','updatedBy','reviewedBy',
-    ];
-    $includes = $relationsAllowed;
-    if (!empty($validated['include'])) {
-        $asked = $csv($validated['include'])->all();
-        $inc   = array_values(array_intersect($relationsAllowed, $asked));
-        if ($inc) $includes = $inc;
-    }
+        $requiredForPolicies = ['id','status','published_at','expires_at','password','slug','view_count','visibility'];
+        $select = array_values(array_unique(array_merge($select, $requiredForPolicies)));
 
-    // --- Base query ---
-    $base = Article::query()
-        ->from($articleTable)
-        ->select($select)
-        ->with($includes)
-        ->withCount(['comments','approvedComments','ratings','shares','history','media','tags','categories'])
-        ->withAvg('ratings','rating');
+        $relationsAllowed = [
+            'categories','tags','media','comments','approvedComments','ratings','shares','history',
+            'author','createdBy','updatedBy','reviewedBy',
+        ];
+        $includes = $relationsAllowed;
+        if (!empty($validated['include'])) {
+            $asked = $csv($validated['include'])->all();
+            $inc   = array_values(array_intersect($relationsAllowed, $asked));
+            if ($inc) $includes = $inc;
+        }
 
-    // Statut (par défaut : publié et non expiré)
-    if (!empty($validated['status'])) {
-        $base->where($articleTable.'.status', $validated['status']);
-    } else {
-        $base->where($articleTable.'.status', 'published')
-            ->whereNotNull($articleTable.'.published_at')
-            ->where($articleTable.'.published_at', '<=', now())
-            ->where(function ($q) use ($articleTable) {
-                $q->whereNull($articleTable.'.expires_at')
-                  ->orWhere($articleTable.'.expires_at', '>', now());
+        $base = Article::query()
+            ->from($articleTable)
+            ->select($select)
+            ->with($includes)
+            ->withCount([
+                'shares as share_count' => fn($q) => $q,
+                'comments','approvedComments','ratings','history','media','tags','categories'
+            ])
+            ->withAvg('ratings','rating');
+
+        if (!empty($validated['status'])) {
+            $base->where($articleTable.'.status', $validated['status']);
+        } else {
+            $base->where($articleTable.'.status', 'published')
+                ->whereNotNull($articleTable.'.published_at')
+                ->where($articleTable.'.published_at', '<=', now())
+                ->where(function ($q) use ($articleTable) {
+                    $q->whereNull($articleTable.'.expires_at')
+                      ->orWhere($articleTable.'.expires_at', '>', now());
+                });
+        }
+
+        $isNumeric = ctype_digit($idOrSlug);
+        if ($isNumeric) {
+            $base->where(function ($q) use ($articleTable, $idOrSlug) {
+                $q->where($articleTable.'.id', (int) $idOrSlug)
+                  ->orWhere($articleTable.'.slug', $idOrSlug);
             });
-    }
+        } else {
+            $base->where($articleTable.'.slug', $idOrSlug);
+        }
 
-    // Ciblage par id ou slug
-    $isId = ctype_digit($idOrSlug);
-    $base->where($articleTable.'.'.($isId ? 'id' : 'slug'), $idOrSlug);
+        $article = $base->firstOrFail();
 
-    // Récupération
-    $article = $base->firstOrFail();
+        // ----- Contrôle d'accès -----
+        // 🔑 support du header X-Article-Password en plus de ?password=
+        $providedPassword = $validated['password'] ?? $request->header('X-Article-Password');
 
-    // Protection par mot de passe (si défini sur l'article)
-    $providedPassword = $validated['password'] ?? null;
-    if (!empty($article->password) && $article->password !== $providedPassword) {
-        return response()->json(['message' => 'Password required or incorrect.'], 403);
-    }
+        $vis = $article->visibility instanceof \BackedEnum
+            ? $article->visibility->value
+            : (string) $article->visibility;
 
-    // Incrémenter le compteur de vues si demandé
-    if ($request->boolean('increment_view')) {
-        Article::where('id', $article->id)->increment('view_count');
-        // refléter la nouvelle valeur dans la réponse
-        $article->view_count = (int) ($article->view_count ?? 0) + 1;
-    }
+        $isPrivate = ($vis === ArticleVisibility::PRIVATE->value);
+        $isPwd     = ($vis === ArticleVisibility::PASSWORD_PROTECTED->value);
 
-    // Ne jamais exposer le champ password dans la réponse
-    $article->makeHidden(['password']);
+        if ($isPrivate) {
+            return response()->json([
+                'message'    => 'This article is private.',
+                'code'       => 'private',
+                'visibility' => ArticleVisibility::PRIVATE->value,
+            ], 403);
+        }
 
-    return response()->json([
-        'data' => $article,
-        'meta' => [
-            'relations_included' => implode(',', $includes),
-            'filters' => [
-                'status' => $validated['status'] ?? 'published',
+        if ($isPwd) {
+            if ($providedPassword === null || $providedPassword === '') {
+                return response()->json([
+                    'message'    => 'Password required or incorrect.',
+                    'code'       => 'password_required',
+                    'visibility' => ArticleVisibility::PASSWORD_PROTECTED->value,
+                ], 403);
+            }
+
+            $stored = (string) $article->password;
+            $looksHashed = str_starts_with($stored, '$2y$')
+                        || str_starts_with($stored, '$argon2i$')
+                        || str_starts_with($stored, '$argon2id$');
+
+            $ok = $looksHashed
+                ? Hash::check($providedPassword, $stored)
+                : hash_equals($stored, $providedPassword);
+
+            if (!$ok) {
+                return response()->json([
+                    'message'    => 'Password required or incorrect.',
+                    'code'       => 'password_incorrect',
+                    'visibility' => ArticleVisibility::PASSWORD_PROTECTED->value,
+                ], 403);
+            }
+        }
+
+        // vues (idempotent léger)
+        $viewIncremented = false;
+        if ($request->boolean('increment_view')) {
+            $dedupeKey = sha1(($request->ip() ?? '0.0.0.0').'|'.($request->userAgent() ?? 'ua'));
+            $viewIncremented = app(\App\Services\ArticleCountersService::class)
+                ->incrementView($article, 1, $dedupeKey, 300);
+            if ($viewIncremented) {
+                $article->view_count = (int) ($article->view_count ?? 0) + 1;
+            }
+        }
+
+        // normalisation métriques
+        if ($article->getAttribute('comment_count') === null) {
+            if ($article->getAttribute('approved_comments_count') !== null) {
+                $article->setAttribute('comment_count', (int) $article->getAttribute('approved_comments_count'));
+            } elseif ($article->getAttribute('comments_count') !== null) {
+                $article->setAttribute('comment_count', (int) $article->getAttribute('comments_count'));
+            }
+        }
+        if ($article->getAttribute('rating_average') === null && $article->getAttribute('ratings_avg_rating') !== null) {
+            $article->setAttribute('rating_average', (float) $article->getAttribute('ratings_avg_rating'));
+        }
+
+        $article->setAttribute('locked', false);
+        $article->setAttribute('reason', null);
+        $article->makeHidden(['password']);
+
+        return response()->json([
+            'data' => $article,
+            'meta' => [
+                'relations_included' => implode(',', $includes),
+                'filters' => [
+                    'status' => $validated['status'] ?? 'published',
+                ],
+                'view_incremented' => $viewIncremented,
             ],
-        ],
-    ]);
-}
+        ]);
+    }
 
+    /* =========================================================
+     * UNLOCK (POST /articles/{idOrSlug}/unlock)
+     * ========================================================= */
+    public function unlock(Request $request, string $idOrSlug): JsonResponse
+    {
+        $validated = $request->validate([
+            'password' => 'required|string|max:255',
+            'include'  => 'nullable|string',
+            'fields'   => 'nullable|string',
+        ]);
+
+        // On réutilise show() mais en forçant le password depuis le body
+        // et en permettant include/fields
+        $request->merge([
+            'password' => $validated['password'],
+            'include'  => $validated['include'] ?? $request->get('include'),
+            'fields'   => $validated['fields']  ?? $request->get('fields'),
+        ]);
+
+        return $this->show($request, $idOrSlug);
+    }
+
+    /* =========================================================
+     * RÉSUMÉ NOTES (utilisé par ton Visualiseur)
+     * ========================================================= */
+    public function ratingsSummary(Request $request, string $id): JsonResponse
+    {
+        $article = Article::query()->findOrFail($id);
+
+        $avg = (float) ($article->ratings()->avg('rating') ?? 0);
+        $cnt = (int)   ($article->ratings()->count() ?? 0);
+
+        $myRating = null;
+        $myReview = null;
+
+        // Si tu utilises Sanctum/JWT, adapte ce bloc :
+        $user = $request->user(); // ou $request->user('sanctum')
+        if ($user) {
+            $mine = $article->ratings()->where('user_id', $user->id)->first();
+            if ($mine) {
+                $myRating = (int) $mine->rating;
+                $myReview = (string) ($mine->review ?? '');
+            }
+        }
+
+        return response()->json([
+            'data' => [
+                'rating_average' => $avg,
+                'rating_count'   => $cnt,
+                'my_rating'      => $myRating,
+                'my_review'      => $myReview,
+            ],
+        ]);
+    }
 }

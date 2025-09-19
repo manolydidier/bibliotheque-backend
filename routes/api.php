@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\Api\ArticleController;
+use App\Http\Controllers\Api\ArticleRatingController;
 use App\Http\Controllers\Api\ArticleTagController;
 use App\Http\Controllers\Api\EmailVerificationController;
 use App\Http\Controllers\Auth\PasswordController;
@@ -20,6 +21,7 @@ use App\Http\Controllers\Api\TagController;
 use App\Http\Controllers\Api\CategoryController;
 use App\Http\Controllers\Api\CommentController;
 use App\Http\Controllers\Api\ShareController;
+use App\Http\Controllers\Api\UserActivityController;
 use Illuminate\Support\Facades\Log;
 
 
@@ -51,6 +53,7 @@ Route::get('/validate-unique', [AuthController::class, 'validateUnique']);
     Route::post('/auth/{id}/updatepassword', [AuthController::class, 'updatePassword'])->middleware('auth:sanctum');
     Route::get('/user', [AuthController::class, 'showProfile'])->middleware('auth:sanctum');
     Route::post('/user/{id}/edit', [AuthController::class, 'updateProfile'])->middleware('auth:sanctum');
+    Route::get('/user/{id}/profile', [AuthController::class, 'user'])->middleware('auth:sanctum');
     Route::get('/users', [AuthController::class, 'index'])->middleware('auth:sanctum');
    
     Route::delete('users/{id}/delete', [AuthController::class, 'delete'])->middleware('auth:sanctum');
@@ -123,6 +126,8 @@ Route::get('/auth/google/callback', [AuthController::class, 'googleCallback'])
             Route::get('/', [ArticleController::class, 'index'])->name('index');
             Route::get('/search', [ArticleController::class, 'search'])->name('search');
             Route::get('/{slug}', [ArticleController::class, 'show'])->name('show');
+              // Déverrouillage par POST JSON { password: "..." }
+            Route::post('{idOrSlug}/unlock', [ArticleController::class, 'unlock']);
         });
 
 // ========================================
@@ -206,6 +211,33 @@ Route::post('/share', [ShareController::class, 'store'])->name('shares.store');
 Route::post('/share/{share}/convert', [ShareController::class, 'convert'])->name('shares.convert');
 
 Route::get('/share/ping', [ShareController::class, 'ping'])->name('shares.ping');
+
+// ========================================
+// MODULE RATING OU NOTES DES ARTICLES
+// ========================================
+
+
+Route::middleware('throttle:30,1')->group(function () {
+    Route::get   ('/articles/{article}/ratings',  [ArticleRatingController::class, 'show']);
+    Route::post  ('/articles/{article}/ratings',  [ArticleRatingController::class, 'store']);
+    Route::put   ('/articles/{article}/ratings',  [ArticleRatingController::class, 'update']);
+    Route::patch ('/articles/{article}/ratings',  [ArticleRatingController::class, 'update']);
+    Route::delete('/articles/{article}/ratings',  [ArticleRatingController::class, 'destroy']);
+
+    // (optionnel) votes d’utilité d’un avis existant
+    Route::post('/articles/{article}/ratings/{rating}/vote', [ArticleRatingController::class, 'voteHelpful']);
+});
+
+// ========================================
+// MODULE ACTIVITY USER - API ROUTES
+// ===
+
+Route::middleware('auth:sanctum')->group(function () {
+    Route::get('/users/{user}/activities', [UserActivityController::class, 'index']);
+    Route::get('/me/effective-permissions', [UserActivityController::class, 'me']);
+});
+
+
 
 // ========================================
 // MODULE ARTICLES - API ROUTES
