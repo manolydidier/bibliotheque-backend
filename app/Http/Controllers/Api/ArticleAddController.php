@@ -65,19 +65,36 @@ class ArticleAddController extends Controller
 
             // Préparation des données
             $articleData = $request->only([
-                'title', 'slug', 'excerpt', 'content', 'featured_image', 
-                'featured_image_alt', 'status', 'visibility', 'password',
-                'published_at', 'scheduled_at', 'expires_at', 'is_featured',
-                'is_sticky', 'allow_comments', 'allow_sharing', 'allow_rating',
-                'author_name', 'author_bio', 'author_avatar', 'author_id',
-                'meta', 'seo_data'
+                'title',
+                'slug',
+                'excerpt',
+                'content',
+                'featured_image',
+                'featured_image_alt',
+                'status',
+                'visibility',
+                'password',
+                'published_at',
+                'scheduled_at',
+                'expires_at',
+                'is_featured',
+                'is_sticky',
+                'allow_comments',
+                'allow_sharing',
+                'allow_rating',
+                'author_name',
+                'author_bio',
+                'author_avatar',
+                'author_id',
+                'meta',
+                'seo_data'
             ]);
 
             // Ajout des données utilisateur
             $user = Auth::user();
             $articleData['created_by'] = $user->id;
             $articleData['updated_by'] = $user->id;
-            
+
             // Gestion du tenant_id (à adapter selon votre logique d'authentification)
             if (empty($articleData['tenant_id'])) {
                 $articleData['tenant_id'] = $user->tenant_id ?? null;
@@ -121,10 +138,9 @@ class ArticleAddController extends Controller
                 'message' => 'Article créé avec succès',
                 'data' => $article
             ], 201);
-
         } catch (\Exception $e) {
             DB::rollBack();
-            
+
             return response()->json([
                 'message' => 'Erreur lors de la création de l\'article',
                 'error' => $e->getMessage()
@@ -171,7 +187,7 @@ class ArticleAddController extends Controller
             $user = Auth::user();
             $articleData['created_by'] = $user->id;
             $articleData['updated_by'] = $user->id;
-            
+
             if (empty($articleData['tenant_id'])) {
                 $articleData['tenant_id'] = $user->tenant_id ?? null;
             }
@@ -182,21 +198,59 @@ class ArticleAddController extends Controller
 
             $article = Article::create($articleData);
 
-            // Attachement des catégories et tags
+            // CORRECTION : Attachement des catégories avec vérification du type
             if ($request->has('categories')) {
-                $categoriesData = [];
-                foreach ($request->categories as $index => $categoryId) {
-                    $categoriesData[$categoryId] = ['is_primary' => $index === 0, 'sort_order' => $index];
+                $categories = $request->categories;
+
+                // Si categories est une string, convertir en array
+                if (is_string($categories)) {
+                    // Essayez de décoder JSON d'abord
+                    $decoded = json_decode($categories, true);
+                    if (json_last_error() === JSON_ERROR_NONE) {
+                        $categories = $decoded;
+                    } else {
+                        // Sinon, split par des virgules
+                        $categories = array_map('intval', array_filter(explode(',', $categories)));
+                    }
                 }
-                $article->categories()->attach($categoriesData);
+
+                // S'assurer que c'est un array avant de faire le foreach
+                if (is_array($categories) && !empty($categories)) {
+                    $categoriesData = [];
+                    foreach ($categories as $index => $categoryId) {
+                        $categoriesData[$categoryId] = [
+                            'is_primary' => $index === 0,
+                            'sort_order' => $index
+                        ];
+                    }
+                    $article->categories()->attach($categoriesData);
+                }
             }
 
+            // CORRECTION : Attachement des tags avec vérification du type
             if ($request->has('tags')) {
-                $tagsData = [];
-                foreach ($request->tags as $index => $tagId) {
-                    $tagsData[$tagId] = ['sort_order' => $index];
+                $tags = $request->tags;
+
+                // Si tags est une string, convertir en array
+                if (is_string($tags)) {
+                    // Essayez de décoder JSON d'abord
+                    $decoded = json_decode($tags, true);
+                    if (json_last_error() === JSON_ERROR_NONE) {
+                        $tags = $decoded;
+                    } else {
+                        // Sinon, split par des virgules
+                        $tags = array_map('intval', array_filter(explode(',', $tags)));
+                    }
                 }
-                $article->tags()->attach($tagsData);
+
+                // S'assurer que c'est un array avant de faire le foreach
+                if (is_array($tags) && !empty($tags)) {
+                    $tagsData = [];
+                    foreach ($tags as $index => $tagId) {
+                        $tagsData[$tagId] = ['sort_order' => $index];
+                    }
+                    $article->tags()->attach($tagsData);
+                }
             }
 
             DB::commit();
@@ -207,10 +261,9 @@ class ArticleAddController extends Controller
                 'message' => 'Article créé avec succès',
                 'data' => $article
             ], 201);
-
         } catch (\Exception $e) {
             DB::rollBack();
-            
+
             return response()->json([
                 'message' => 'Erreur lors de la création de l\'article',
                 'error' => $e->getMessage()
