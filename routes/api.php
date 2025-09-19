@@ -23,7 +23,7 @@ use App\Http\Controllers\Api\CommentController;
 use App\Http\Controllers\Api\ShareController;
 use App\Http\Controllers\Api\UserActivityController;
 use Illuminate\Support\Facades\Log;
-
+use App\Http\Controllers\Api\ArticleAddController;
 
 Route::get('/user', function (Request $request) {
     return $request->user();
@@ -153,6 +153,13 @@ Route::post('comments/{comment}/reject',  [CommentController::class, 'reject']);
 Route::post('comments/{comment}/spam',    [CommentController::class, 'spam']);
 Route::post('comments/{comment}/feature', [CommentController::class, 'feature']);
 
+//========================================= ADD ARTICLE
+
+Route::middleware('auth:sanctum')->group(function () {
+    Route::post('/articlesstore', [ArticleAddController::class, 'store']);
+    Route::post('/articles/with-files', [ArticleAddController::class, 'storeWithFiles']);
+
+});
 
 // ========================================
 
@@ -160,7 +167,7 @@ Route::post('comments/{comment}/feature', [CommentController::class, 'feature'])
 Route::prefix('categories')->name('categories.')->group(function () {
     Route::get('/', [CategoryController::class, 'index'])->name('index');
     Route::get('/{category}', [CategoryController::class, 'show'])->name('show');
-    
+    Route::get('/categorieAdvance',[categoryController::class, 'index2']);
     Route::middleware('auth:sanctum')->group(function () {
         Route::post('/', [CategoryController::class, 'store'])->name('store');
         Route::put('/{category}', [CategoryController::class, 'update'])->name('update');
