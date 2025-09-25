@@ -70,5 +70,9 @@ class AppServiceProvider extends ServiceProvider
 
          Comment::observe(CommentObserver::class);
          ArticleShare::observe(ArticleShareObserver::class);
+
+         
     }
+
+    
 }

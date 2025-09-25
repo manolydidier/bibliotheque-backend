@@ -2,18 +2,23 @@
 
 namespace App\Http\Controllers\Api;
 
+use App\Enums\ArticleVisibility;
 use App\Http\Controllers\Controller;
-use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Log;
-use Illuminate\Http\JsonResponse;
 use App\Models\Article;
-use Illuminate\Support\Facades\DB;          // ✅ CORRECT
-use Illuminate\Support\Facades\Schema;     // (pour sécuriser les facettes)
-use Illuminate\Support\Facades\Hash;       // ✅ pour comparer hash/password
-use App\Enums\ArticleVisibility;           // ✅ enum de visibilité
+use Illuminate\Http\JsonResponse;
+use Illuminate\Http\Request;
+use Illuminate\Support\Arr;
+use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Schema;
 
 class ArticleController extends Controller
 {
+    /* =========================================================
+     * INDEX
+     * ========================================================= */
     public function index(Request $request): JsonResponse
     {
         // --- Validation souple (IDs CSV ou tableaux) ---
@@ -57,7 +62,7 @@ class ArticleController extends Controller
             'include_facets' => 'nullable|boolean',
             'facet_fields'   => 'nullable|string',
 
-            // ✅ Visibilité & masquage
+            // Visibilité & masquage
             'visibility'     => 'nullable|string|in:public,private,password_protected',
             'hide_locked'    => 'nullable|boolean',
         ]);
@@ -77,7 +82,7 @@ class ArticleController extends Controller
             'featured_image','featured_image_alt','meta','seo_data',
             'status','visibility','password',
             'published_at','scheduled_at','expires_at',
-            'reading_time','word_count','view_count',/*'share_count',*/'comment_count',
+            'reading_time','word_count','view_count','comment_count',
             'rating_average','rating_count',
             'is_featured','is_sticky','allow_comments','allow_sharing','allow_rating',
             'author_name','author_bio','author_avatar','author_id',
@@ -92,7 +97,7 @@ class ArticleController extends Controller
             $sel = array_values(array_intersect($allowedColumns, $requested));
             if ($sel) $select = $sel;
         }
-        // ⚠️ on retire la colonne persistée share_count pour éviter conflit avec l'alias withCount
+        // retire share_count persisté (conflit withCount)
         $select = array_values(array_diff($select, ['share_count']));
 
         // Relations autorisées
@@ -112,9 +117,8 @@ class ArticleController extends Controller
             ->from($articleTable)
             ->select($select)
             ->with($includes)
-            // ✅ calcul du nombre de partages depuis la table article_shares
             ->withCount([
-                'shares as share_count' => fn($q) => $q, // filtre status ici si besoin
+                'shares as share_count' => fn($q) => $q,
                 'comments','approvedComments','ratings','history','media','tags','categories'
             ])
             ->withAvg('ratings', 'rating');
@@ -142,7 +146,7 @@ class ArticleController extends Controller
                  });
         }
 
-        // ✅ Visibilité (optionnel)
+        // Visibilité (optionnel)
         if (!empty($validated['visibility'])) {
             $base->where($articleTable.'.visibility', $validated['visibility']);
         }
@@ -180,7 +184,7 @@ class ArticleController extends Controller
             if ($authorIds) $base->whereIn($articleTable.'.author_id', $authorIds);
         }
 
-        // Catégories (ids / names / slugs)
+        // Catégories
         if (!empty($validated['category_ids']) || !empty($validated['categories']) || !empty($validated['category_slugs'])) {
             $catIds   = $toInts($csv($validated['category_ids'] ?? ''))->all();
             $catNames = $csv($validated['categories'] ?? '')->all();
@@ -195,7 +199,7 @@ class ArticleController extends Controller
             });
         }
 
-        // Tags (ids / names / slugs)
+        // Tags
         if (!empty($validated['tag_ids']) || !empty($validated['tags']) || !empty($validated['tag_slugs'])) {
             $tagIds   = $toInts($csv($validated['tag_ids'] ?? ''))->all();
             $tagNames = $csv($validated['tags'] ?? '')->all();
@@ -248,7 +252,6 @@ class ArticleController extends Controller
                 ->filter(function ($item) use ($hideLocked) {
                     if (!$hideLocked) return true;
 
-                    // Normaliser visibility (enum ou string)
                     $vis = $item->visibility instanceof \BackedEnum
                         ? $item->visibility->value
                         : (string)$item->visibility;
@@ -272,7 +275,7 @@ class ArticleController extends Controller
                         $item->setAttribute('rating_average', (float) $item->getAttribute('ratings_avg_rating'));
                     }
 
-                    // ✅ Indicateur de verrouillage pour l’index
+                    // Indicateur de verrouillage pour l’index
                     $vis = $item->visibility instanceof \BackedEnum
                         ? $item->visibility->value
                         : (string)$item->visibility;
@@ -284,7 +287,7 @@ class ArticleController extends Controller
                     $item->setAttribute('locked', $locked);
                     $item->setAttribute('reason', $locked ? ($isPrivate ? 'private' : 'password_required') : null);
 
-                    // ✅ Ne jamais exposer password ni content si verrouillé
+                    // Ne jamais exposer password ni content si verrouillé
                     if ($locked) {
                         $item->setAttribute('content', null);
                     }
@@ -384,11 +387,15 @@ class ArticleController extends Controller
         ]);
     }
 
-/* =========================================================
+    /* =========================================================
      * SHOW (lit aussi le header X-Article-Password)
      * ========================================================= */
     public function show(Request $request, string $idOrSlug): JsonResponse
     {
+        // Log de l'utilisateur actuel
+        $this->logCurrentUser($request);
+
+        // Validation des paramètres
         $validated = $request->validate([
             'include'        => 'nullable|string',
             'fields'         => 'nullable|string',
@@ -397,6 +404,7 @@ class ArticleController extends Controller
             'increment_view' => 'nullable|boolean',
         ]);
 
+        // Helpers
         $csv = fn($v) => collect(is_array($v) ? $v : explode(',', (string) $v))
             ->map(fn($x) => trim((string) $x))
             ->filter()
@@ -404,30 +412,34 @@ class ArticleController extends Controller
 
         $articleTable = (new Article())->getTable();
 
+        // Colonnes autorisées
         $allowedColumns = [
             'id','tenant_id','title','slug','excerpt','content',
             'featured_image','featured_image_alt','meta','seo_data',
             'status','visibility','password',
             'published_at','scheduled_at','expires_at',
-            'reading_time','word_count','view_count',/*'share_count',*/'comment_count',
-            'rating_average','rating_count',
-            'is_featured','is_sticky','allow_comments','allow_sharing','allow_rating',
+            'reading_time','word_count','view_count','comment_count',
+            'rating_average','rating_count','is_featured','is_sticky',
+            'allow_comments','allow_sharing','allow_rating',
             'author_name','author_bio','author_avatar','author_id',
             'created_by','updated_by','reviewed_by','reviewed_at','review_notes',
             'created_at','updated_at','deleted_at',
         ];
 
+        // Sélection
         $select = $allowedColumns;
         if (!empty($validated['fields'])) {
             $requested = $csv($validated['fields'])->all();
             $sel = array_values(array_intersect($allowedColumns, $requested));
             if ($sel) $select = $sel;
         }
-        $select = array_values(array_diff($select, ['share_count']));
+        $select = array_values(array_diff($select, ['share_count'])); // Exclure share_count
 
-        $requiredForPolicies = ['id','status','published_at','expires_at','password','slug','view_count','visibility'];
+        // Champs requis pour politiques
+        $requiredForPolicies = ['id','status','published_at','expires_at','password','slug','view_count','visibility','author_id'];
         $select = array_values(array_unique(array_merge($select, $requiredForPolicies)));
 
+        // Relations
         $relationsAllowed = [
             'categories','tags','media','comments','approvedComments','ratings','shares','history',
             'author','createdBy','updatedBy','reviewedBy',
@@ -439,6 +451,7 @@ class ArticleController extends Controller
             if ($inc) $includes = $inc;
         }
 
+        // Requête
         $base = Article::query()
             ->from($articleTable)
             ->select($select)
@@ -449,6 +462,7 @@ class ArticleController extends Controller
             ])
             ->withAvg('ratings','rating');
 
+        // Filtre statut (contenu public par défaut)
         if (!empty($validated['status'])) {
             $base->where($articleTable.'.status', $validated['status']);
         } else {
@@ -461,6 +475,7 @@ class ArticleController extends Controller
                 });
         }
 
+        // id numérique ou slug
         $isNumeric = ctype_digit($idOrSlug);
         if ($isNumeric) {
             $base->where(function ($q) use ($articleTable, $idOrSlug) {
@@ -474,7 +489,6 @@ class ArticleController extends Controller
         $article = $base->firstOrFail();
 
         // ----- Contrôle d'accès -----
-        // 🔑 support du header X-Article-Password en plus de ?password=
         $providedPassword = $validated['password'] ?? $request->header('X-Article-Password');
 
         $vis = $article->visibility instanceof \BackedEnum
@@ -484,7 +498,8 @@ class ArticleController extends Controller
         $isPrivate = ($vis === ArticleVisibility::PRIVATE->value);
         $isPwd     = ($vis === ArticleVisibility::PASSWORD_PROTECTED->value);
 
-        if ($isPrivate) {
+        // **Privé => permission requise**
+        if ($isPrivate && !$this->userHasPermissionToViewPrivateArticle($request, $article)) {
             return response()->json([
                 'message'    => 'This article is private.',
                 'code'       => 'private',
@@ -492,6 +507,7 @@ class ArticleController extends Controller
             ], 403);
         }
 
+        // **Protégé par mot de passe**
         if ($isPwd) {
             if ($providedPassword === null || $providedPassword === '') {
                 return response()->json([
@@ -519,7 +535,7 @@ class ArticleController extends Controller
             }
         }
 
-        // vues (idempotent léger)
+        // Incrément vue
         $viewIncremented = false;
         if ($request->boolean('increment_view')) {
             $dedupeKey = sha1(($request->ip() ?? '0.0.0.0').'|'.($request->userAgent() ?? 'ua'));
@@ -530,7 +546,7 @@ class ArticleController extends Controller
             }
         }
 
-        // normalisation métriques
+        // Normalisation métriques
         if ($article->getAttribute('comment_count') === null) {
             if ($article->getAttribute('approved_comments_count') !== null) {
                 $article->setAttribute('comment_count', (int) $article->getAttribute('approved_comments_count'));
@@ -570,7 +586,6 @@ class ArticleController extends Controller
         ]);
 
         // On réutilise show() mais en forçant le password depuis le body
-        // et en permettant include/fields
         $request->merge([
             'password' => $validated['password'],
             'include'  => $validated['include'] ?? $request->get('include'),
@@ -581,7 +596,7 @@ class ArticleController extends Controller
     }
 
     /* =========================================================
-     * RÉSUMÉ NOTES (utilisé par ton Visualiseur)
+     * RÉSUMÉ NOTES (utilisé par le Visualiseur)
      * ========================================================= */
     public function ratingsSummary(Request $request, string $id): JsonResponse
     {
@@ -593,8 +608,7 @@ class ArticleController extends Controller
         $myRating = null;
         $myReview = null;
 
-        // Si tu utilises Sanctum/JWT, adapte ce bloc :
-        $user = $request->user(); // ou $request->user('sanctum')
+        $user = $this->currentUser($request);
         if ($user) {
             $mine = $article->ratings()->where('user_id', $user->id)->first();
             if ($mine) {
@@ -611,5 +625,193 @@ class ArticleController extends Controller
                 'my_review'      => $myReview,
             ],
         ]);
+    }
+
+    /* =========================================================
+     * HELPERS AUTH / PERMISSIONS
+     * ========================================================= */
+
+    /**
+     * Récupère l'utilisateur courant (Sanctum / Session)
+     */
+    private function currentUser(Request $request)
+    {
+        return $request->user()
+            ?? Auth::guard('sanctum')->user()
+            ?? Auth::user();
+    }
+
+    /**
+     * Log lisible des rôles & permissions de l'utilisateur courant
+     */
+    private function logCurrentUser(Request $request): void
+    {
+        $u = $this->currentUser($request);
+
+        if (!$u) {
+            Log::warning('No authenticated user on this request', [
+                'ip'         => $request->ip(),
+                'route'      => optional($request->route())->uri(),
+                'user_agent' => $request->userAgent(),
+            ]);
+            return;
+        }
+
+        // Rôles
+        $roles = method_exists($u, 'roles')
+            ? $u->roles()->pluck('name')->values()->all()
+            : (property_exists($u, 'roles') ? collect($u->roles)->pluck('name')->values()->all() : []);
+
+        // Permissions : on collecte name/action/resource si dispo
+        $permTokens = $this->permissionTokensFromUser($u)->values()->all();
+
+        // Abilities du token (Sanctum)
+        $abilities = method_exists($u, 'currentAccessToken') && $u->currentAccessToken()
+            ? $u->currentAccessToken()->abilities
+            : [];
+
+        Log::info('Authenticated user roles/permissions', [
+            'user_id'    => $u->id ?? null,
+            'roles'      => $roles,
+            'perms'      => $permTokens,
+            'abilities'  => $abilities,
+            'ip'         => $request->ip(),
+            'route'      => optional($request->route())->uri(),
+            'method'     => $request->method(),
+        ]);
+    }
+
+    /**
+     * Extrait une collection de "tokens" de permission (lowercase)
+     * depuis name/action/resource (relations custom) et Spatie si présent.
+     */
+    private function permissionTokensFromUser($user): \Illuminate\Support\Collection
+    {
+        $tokens = collect();
+
+        // Custom relation permissions(): name/action/resource
+        try {
+            if (method_exists($user, 'permissions')) {
+                $perms = $user->permissions()->get(['name','action','resource']);
+                $tokens = $tokens->merge(
+                    collect($perms)->flatMap(function ($p) {
+                        return [
+                            mb_strtolower((string)($p->name ?? '')),
+                            mb_strtolower((string)($p->action ?? '')),
+                            mb_strtolower((string)($p->resource ?? '')),
+                        ];
+                    })
+                );
+            } elseif (property_exists($user, 'permissions')) {
+                $perms = collect($user->permissions);
+                $tokens = $tokens->merge(
+                    $perms->flatMap(function ($p) {
+                        return [
+                            mb_strtolower((string)($p->name ?? '')),
+                            mb_strtolower((string)($p->action ?? '')),
+                            mb_strtolower((string)($p->resource ?? '')),
+                        ];
+                    })
+                );
+            }
+        } catch (\Throwable $e) {
+            // no-op
+        }
+
+        // Spatie (facultatif) : on ajoute le nom brut si dispo
+        try {
+            if (method_exists($user, 'getAllPermissions')) {
+                $tokens = $tokens->merge(
+                    $user->getAllPermissions()->pluck('name')->map(fn($n) => mb_strtolower((string)$n))
+                );
+            }
+        } catch (\Throwable $e) {
+            // no-op
+        }
+
+        // Nettoyage
+        return $tokens->filter()->unique()->values();
+    }
+
+    /**
+     * Teste si l'utilisateur courant peut voir un article privé.
+     * Règle principale: possession d'une permission
+     *   - 'articles.read_private' (recommandée)
+     *   - 'articles.view_private'
+     *   - tolérance FR: "Lire articles privés"
+     * Fallbacks:
+     *   - auteur de l'article
+     *   - rôles forts: Admin/Owner/Super/Manager
+     *   - ability Sanctum 'articles.read_private'
+     */
+    private function userHasPermissionToViewPrivateArticle(Request $request, Article $article): bool
+    {
+        $user = $this->currentUser($request);
+        if (!$user) {
+            return false;
+        }
+
+        // 1) L'auteur voit toujours
+        if (!empty($article->author_id) && (int)$article->author_id === (int)$user->id) {
+            return true;
+        }
+
+        // 2) Rôles forts (si tu veux autoriser par rôle)
+        try {
+            if (method_exists($user, 'hasAnyRole') && $user->hasAnyRole(['Admin','Owner','Super','Manager'])) {
+                return true;
+            }
+            if (method_exists($user, 'roles')) {
+                $roles = $user->roles()->pluck('name')->map(fn($r)=>mb_strtolower((string)$r));
+                if ($roles->contains(fn($r)=>preg_match('/\b(admin|owner|super|manager)\b/', $r))) {
+                    return true;
+                }
+            } elseif (property_exists($user, 'roles')) {
+                $roles = collect($user->roles)->pluck('name')->map(fn($r)=>mb_strtolower((string)$r));
+                if ($roles->contains(fn($r)=>preg_match('/\b(admin|owner|super|manager)\b/', $r))) {
+                    return true;
+                }
+            }
+        } catch (\Throwable $e) {
+            // no-op
+        }
+
+        // 3) Permission explicite (prioritaire)
+        //    Spatie: $user->hasPermissionTo('articles.read_private') ou $user->can('articles.read_private')
+        try {
+            if (method_exists($user, 'hasPermissionTo') && $user->hasPermissionTo('articles.read_private')) {
+                return true;
+            }
+            if (method_exists($user, 'can') && $user->can('articles.read_private')) {
+                return true;
+            }
+        } catch (\Throwable $e) {
+            // no-op
+        }
+
+        // 4) Permissions "custom" (name/action/resource) => on compare par tokens
+        $permTokens = $this->permissionTokensFromUser($user);
+
+        $allows = $permTokens->contains(function ($v) {
+            return
+                str_contains($v, 'articles.read_private') ||
+                str_contains($v, 'articles.view_private') ||
+                $v === 'lire articles privés' ||
+                preg_match('/(article|articles).*priv(e|é)/', $v);
+        });
+
+        if ($allows) {
+            return true;
+        }
+
+        // 5) Ability Sanctum
+        if (method_exists($user, 'currentAccessToken') && $user->currentAccessToken()) {
+            $token = $user->currentAccessToken();
+            if (is_array($token->abilities) && (in_array('*', $token->abilities, true) || in_array('articles.read_private', $token->abilities, true))) {
+                return true;
+            }
+        }
+
+        return false;
     }
 }

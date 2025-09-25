@@ -123,11 +123,11 @@ Route::get('/auth/google/callback', [AuthController::class, 'googleCallback'])
 
 
         Route::prefix('articles')->name('articles.')->group(function () {
-            Route::get('/', [ArticleController::class, 'index'])->name('index');
-            Route::get('/search', [ArticleController::class, 'search'])->name('search');
-            Route::get('/{slug}', [ArticleController::class, 'show'])->name('show');
+            Route::get('/', [ArticleController::class, 'index'])->name('index')->middleware('auth:sanctum');
+            Route::get('/search', [ArticleController::class, 'search'])->name('search')->middleware('auth:sanctum');
+            Route::get('/{slug}', [ArticleController::class, 'show'])->name('show')->middleware('auth:sanctum');
               // Déverrouillage par POST JSON { password: "..." }
-            Route::post('{idOrSlug}/unlock', [ArticleController::class, 'unlock']);
+            Route::post('{idOrSlug}/unlock', [ArticleController::class, 'unlock'])->middleware('auth:sanctum');
         });
 
 // ========================================
