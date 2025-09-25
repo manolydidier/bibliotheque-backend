@@ -235,8 +235,8 @@ class Article extends Model
     protected function slug(): Attribute
     {
         return Attribute::make(
-            get: fn (string $value) => $value,
-            set: fn (string $value) => Str::slug($value),
+            get: fn (?string $value) => $value,
+            set: fn (?string $value) => Str::slug($value),
         );
     }
 

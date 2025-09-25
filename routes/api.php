@@ -23,7 +23,7 @@ use App\Http\Controllers\Api\CommentController;
 use App\Http\Controllers\Api\ShareController;
 use App\Http\Controllers\Api\UserActivityController;
 use Illuminate\Support\Facades\Log;
-
+use App\Http\Controllers\Api\ArticleAddController;
 
 Route::get('/user', function (Request $request) {
     return $request->user();
@@ -154,13 +154,30 @@ Route::post('comments/{comment}/spam',    [CommentController::class, 'spam']);
 Route::post('comments/{comment}/feature', [CommentController::class, 'feature']);
 
 
+//========================================= ADD ARTICLE, DELETE, UPDATE
+
+Route::middleware('auth:sanctum')->group(function () {
+    Route::get('/articles/trashed', [ArticleAddController::class, 'trashed']);
+    Route::get('/articles/{id}', [ArticleAddController::class, 'show']);
+    Route::put('/articles/{id}', [ArticleAddController::class, 'update']);
+    Route::post('/articles/{id}/update-with-files', [ArticleAddController::class, 'updateWithFiles']);
+    Route::delete('/articles/{id}', [ArticleAddController::class, 'destroy']);
+    Route::delete('/articles/{id}/soft-delete', [ArticleAddController::class, 'softDelete']);
+    Route::post('/articles/{id}/restore', [ArticleAddController::class, 'restore']);
+    
+
+    Route::post('/articlesstore', [ArticleAddController::class, 'store']);
+    Route::post('/articles/with-files', [ArticleAddController::class, 'storeWithFiles']);
+
+});
+
 // ========================================
 
 // // Categories
 Route::prefix('categories')->name('categories.')->group(function () {
+    Route::get('/categorieAdvance',[categoryController::class, 'index2']);
     Route::get('/', [CategoryController::class, 'index'])->name('index');
     Route::get('/{category}', [CategoryController::class, 'show'])->name('show');
-    
     Route::middleware('auth:sanctum')->group(function () {
         Route::post('/', [CategoryController::class, 'store'])->name('store');
         Route::put('/{category}', [CategoryController::class, 'update'])->name('update');
