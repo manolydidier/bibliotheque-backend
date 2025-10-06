@@ -11,10 +11,12 @@ use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Concerns\HasUuids;
 use Illuminate\Database\Eloquent\Casts\Attribute;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Filesystem\FilesystemManager;
+use Illuminate\Support\Str;
 
 class ArticleMedia extends Model
 {
-    use HasFactory, SoftDeletes, HasUuids;
+    use HasFactory, SoftDeletes;
 
     protected $fillable = [
         'tenant_id',
@@ -38,6 +40,7 @@ class ArticleMedia extends Model
         'is_active',
         'created_by',
         'updated_by',
+        'uuid',
     ];
 
     protected $casts = [
@@ -271,6 +274,13 @@ class ArticleMedia extends Model
     {
         static::deleting(function (ArticleMedia $media) {
             $media->deleteFile();
+        });
+
+        static::creating(function ($model) {
+            if (empty($model->uuid)) {
+                $model->uuid = (string) Str::uuid();
+            }
+            
         });
     }
 }
