@@ -14,6 +14,238 @@ use Illuminate\Support\Facades\Schema;
 
 class UserActivityController extends Controller
 {
+    public function all(Request $request): JsonResponse
+{
+    // Pagination & filtres
+    $perPage   = min(max((int) $request->get('per_page', 10), 1), 100);
+    $page      = max((int) $request->get('page', 1), 1);
+    $type      = (string) $request->get('type', '');
+    $q         = trim((string) $request->get('q', ''));
+    $fromDate  = $request->get('from');
+    $toDate    = $request->get('to');
+
+    // Filtres “qui fait quoi”
+    $actorId   = $request->integer('actor_id'); // ex: assigned_by / created_by / moderated_by / actor_id
+    $targetId  = $request->integer('target_id'); // ex: user_id dans user_roles (bénéficiaire)
+    $userAny   = $request->integer('user'); // implique cet utilisateur (acteur OU cible)
+    $asTarget  = $request->boolean('as_target', false); // vue cible pour rôles
+
+    $items = collect();
+
+    // ------------------------------------------------------------
+    // 1) RÔLES ATTRIBUÉS (tous) — vue acteur/cible selon filtres
+    // ------------------------------------------------------------
+    $roleQuery = UserRole::query()
+        ->with([
+            'user:id,first_name,last_name,username',
+            'role:id,name',
+            'assignedBy:id,first_name,last_name,username',
+        ])
+        ->when($actorId, fn($q) => $q->where('assigned_by', $actorId))
+        ->when($targetId, fn($q) => $q->where('user_id', $targetId))
+        ->when($userAny, fn($q) => $q->where(function($qq) use ($userAny) {
+            $qq->where('assigned_by', $userAny)
+               ->orWhere('user_id', $userAny);
+        }))
+        ->orderByDesc(DB::raw('COALESCE(assigned_at, created_at)'))
+        ->limit(500);
+
+    foreach ($roleQuery->get() as $ur) {
+        $byUser = $ur->assignedBy;
+        $toUser = $ur->user;
+        $by  = $this->displayName($byUser);
+        $to  = $this->displayName($toUser);
+        $roleName = $ur->role?->name ?? 'Inconnu';
+
+        $title = $asTarget
+            ? sprintf('%s a attribué le rôle « %s » à %s', $by, $roleName, $to)
+            : sprintf('%s a attribué le rôle « %s » à %s', $by, $roleName, $to);
+
+        $items->push([
+            'id'          => 'role-'.$ur->id,
+            'type'        => 'role_assigned',
+            'title'       => $title,
+            'subtitle'    => '',
+            'created_at'  => $ur->assigned_at ?? $ur->created_at,
+            'color'       => 'emerald',
+            'actor_id'    => $ur->assigned_by,
+            'target_id'   => $ur->user_id,
+            'role_name'   => $roleName,
+        ]);
+    }
+
+    // ------------------------------------------------------------
+    // 2) ARTICLES CRÉÉS (tous)
+    // ------------------------------------------------------------
+    $articleQuery = Article::query()
+        ->select('id', 'title', 'slug', 'created_at', 'published_at', 'created_by')
+        ->when($actorId, fn($q) => $q->where('created_by', $actorId))
+        ->when($userAny, fn($q) => $q->where('created_by', $userAny))
+        ->orderByDesc('created_at')
+        ->limit(500);
+
+    foreach ($articleQuery->get() as $a) {
+        $items->push([
+            'id'           => 'article-'.$a->id,
+            'type'         => 'article_created',
+            'title'        => sprintf('Article créé : « %s »', $a->title ?: 'Sans titre'),
+            'subtitle'     => '',
+            'created_at'   => $a->created_at,
+            'color'        => 'blue',
+            'article_slug' => $a->slug,
+            'actor_id'     => $a->created_by, // auteur = acteur
+            'target_id'    => null,
+        ]);
+    }
+
+    // ------------------------------------------------------------
+    // 3) COMMENTAIRES APPROUVÉS (tous)
+    // ------------------------------------------------------------
+    $approvalQuery = Comment::query()
+        ->with(['article:id,title,slug'])
+        ->where('status', 'approved')
+        ->when($actorId, fn($q) => $q->where('moderated_by', $actorId))
+        ->when($userAny, fn($q) => $q->where('moderated_by', $userAny))
+        ->orderByDesc('moderated_at')
+        ->limit(500);
+
+    foreach ($approvalQuery->get() as $c) {
+        $items->push([
+            'id'           => 'comment-approve-'.$c->id,
+            'type'         => 'comment_approved',
+            'title'        => sprintf('Commentaire approuvé sur « %s »', $c->article?->title ?: 'Article'),
+            'subtitle'     => $this->shorten($c->content ?? '', 120),
+            'created_at'   => $c->moderated_at ?? $c->updated_at ?? $c->created_at,
+            'color'        => 'indigo',
+            'article_slug' => $c->article?->slug,
+            'comment_id'   => $c->id,
+            'actor_id'     => $c->moderated_by, // modérateur = acteur
+            'target_id'    => null,
+        ]);
+    }
+
+    // ------------------------------------------------------------
+    // 4) PERMISSION EVENTS (si tables présentes)
+    // ------------------------------------------------------------
+    $permissionEvents = collect();
+
+    if (Schema::hasTable('role_permission_audits')) {
+        $permissionEvents = DB::table('role_permission_audits as a')
+            ->leftJoin('users as u', 'u.id', '=', 'a.actor_id')
+            ->leftJoin('roles as r', 'r.id', '=', 'a.role_id')
+            ->when($actorId, fn($q) => $q->where('a.actor_id', $actorId))
+            ->when($userAny, fn($q) => $q->where('a.actor_id', $userAny))
+            ->orderByDesc('a.created_at')
+            ->limit(500)
+            ->get([
+                'a.id',
+                'a.actor_id',
+                'a.permission_key',
+                'a.to_value',
+                'a.created_at',
+                DB::raw("COALESCE(NULLIF(CONCAT_WS(' ', u.first_name, u.last_name), ''), u.username, 'Quelqu’un') as actor_name"),
+                'r.name as role_name',
+            ]);
+    } elseif (Schema::hasTable('permission_events')) {
+        $permissionEvents = DB::table('permission_events as a')
+            ->leftJoin('users as u', 'u.id', '=', 'a.actor_id')
+            ->leftJoin('roles as r', 'r.id', '=', 'a.role_id')
+            ->when($actorId, fn($q) => $q->where('a.actor_id', $actorId))
+            ->when($userAny, fn($q) => $q->where('a.actor_id', $userAny))
+            ->orderByDesc('a.created_at')
+            ->limit(500)
+            ->get([
+                'a.id',
+                'a.actor_id',
+                'a.permission as permission_key',
+                'a.to as to_value',
+                'a.created_at',
+                DB::raw("COALESCE(NULLIF(CONCAT_WS(' ', u.first_name, u.last_name), ''), u.username, 'Quelqu’un') as actor_name"),
+                'r.name as role_name',
+            ]);
+    } elseif (Schema::hasTable('activity_logs')) {
+        $permissionEvents = DB::table('activity_logs as a')
+            ->leftJoin('users as u', 'u.id', '=', 'a.actor_id')
+            ->when($actorId, fn($q) => $q->where('a.actor_id', $actorId))
+            ->when($userAny, fn($q) => $q->where('a.actor_id', $userAny))
+            ->whereIn('a.event', ['permission.updated', 'permission.changed'])
+            ->orderByDesc('a.created_at')
+            ->limit(500)
+            ->get([
+                'a.id',
+                'a.actor_id',
+                'a.created_at',
+                DB::raw("JSON_UNQUOTE(JSON_EXTRACT(a.properties, '$.permission')) as permission_key"),
+                DB::raw("JSON_EXTRACT(a.properties, '$.to') as to_value"),
+                DB::raw("JSON_UNQUOTE(JSON_EXTRACT(a.properties, '$.role.name')) as role_name"),
+                DB::raw("COALESCE(NULLIF(CONCAT_WS(' ', u.first_name, u.last_name), ''), u.username, 'Quelqu’un') as actor_name"),
+            ]);
+    }
+
+    foreach ($permissionEvents as $e) {
+        $actor = $e->actor_name ?: 'Quelqu’un';
+        $role  = $e->role_name ?: 'Inconnu';
+        $toBool = $this->toBool($e->to_value);
+        $perm   = $e->permission_key ?: '—';
+
+        $items->push([
+            'id'         => 'perm-'.$e->id,
+            'type'       => 'permission_changed',
+            'title'      => sprintf("%s a modifié les permissions du rôle « %s »", $actor, $role),
+            'subtitle'   => sprintf("Permission: %s → %s", $perm, $toBool ? 'Activé' : 'Désactivé'),
+            'created_at' => $e->created_at,
+            'color'      => 'violet',
+            'actor_id'   => $e->actor_id,
+            'target_id'  => null,
+        ]);
+    }
+
+    // ------------------------------------------------------------
+    // Tri + Filtres (type, q, from, to) + Pagination
+    // ------------------------------------------------------------
+    $sorted = $items
+        ->filter(fn ($x) => !empty($x['created_at']))
+        ->sortByDesc(fn ($x) => strtotime((string) $x['created_at']))
+        ->values();
+
+    if ($type !== '') {
+        $sorted = $sorted->where('type', $type)->values();
+    }
+
+    if ($q !== '') {
+        $needle = mb_strtolower($q);
+        $sorted = $sorted->filter(function (array $it) use ($needle) {
+            $hay = mb_strtolower(($it['title'] ?? '') . ' ' . ($it['subtitle'] ?? ''));
+            return mb_strpos($hay, $needle) !== false;
+        })->values();
+    }
+
+    if ($fromDate) {
+        $fromTs = strtotime($fromDate . ' 00:00:00');
+        $sorted = $sorted->filter(fn ($it) => strtotime((string) $it['created_at']) >= $fromTs)->values();
+    }
+    if ($toDate) {
+        $toTs = strtotime($toDate . ' 23:59:59');
+        $sorted = $sorted->filter(fn ($it) => strtotime((string) $it['created_at']) <= $toTs)->values();
+    }
+
+    $total   = $sorted->count();
+    $last    = (int) ceil(max($total, 1) / $perPage);
+    $page    = min($page, max($last, 1));
+    $offset  = ($page - 1) * $perPage;
+    $pageSet = $sorted->slice($offset, $perPage)->values();
+
+    return response()->json([
+        'data' => $pageSet,
+        'meta' => [
+            'current_page' => $page,
+            'per_page'     => $perPage,
+            'total'        => $total,
+            'last_page'    => $last,
+        ],
+    ]);
+}
+
     /**
      * GET /api/users/{user}/activities
      *
@@ -389,4 +621,74 @@ class UserActivityController extends Controller
         }
         return false;
     }
+
+    public function pendingCount(Request $request): JsonResponse
+{
+    // Exige un utilisateur connecté
+    $user = $request->user();
+    abort_unless($user, 401, 'Unauthenticated');
+
+    // Si tu veux limiter aux modérateurs :
+    // if (!$this->userLooksAdmin($user)) { abort(403, 'Forbidden'); }
+
+    // Ici on compte les commentaires non modérés
+    $query = \App\Models\Comment::query()
+        ->where('status', 'pending');
+
+    // (Optionnel) Filtres temporels
+    if ($request->filled('from')) {
+        $query->where('created_at', '>=', $request->get('from') . ' 00:00:00');
+    }
+    if ($request->filled('to')) {
+        $query->where('created_at', '<=', $request->get('to') . ' 23:59:59');
+    }
+
+    return response()->json([
+        'pending' => $query->count(),
+    ]);
+}
+
+public function pendingList(Request $request): \Illuminate\Http\JsonResponse
+{
+    $user = $request->user();
+    abort_unless($user, 401, 'Unauthenticated');
+
+    $perPage = min(max((int)$request->get('per_page', 10), 1), 100);
+    $page    = max((int)$request->get('page', 1), 1);
+
+    // Exemple: commentaires en attente
+    $q = \App\Models\Comment::query()
+        ->with(['article:id,title,slug'])
+        ->where('status', 'pending')
+        ->orderByDesc('created_at');
+
+    $total = $q->count();
+    $last  = (int)ceil(max($total,1) / $perPage);
+    $page  = min($page, $last);
+    $items = $q->forPage($page, $perPage)->get();
+
+    $data = $items->map(function ($c) {
+        return [
+            'id'           => 'pending-comment-'.$c->id,
+            'type'         => 'comment_pending',
+            'title'        => 'Commentaire en attente sur « '.($c->article->title ?? 'Article').' »',
+            'subtitle'     => mb_strimwidth(strip_tags((string)$c->content), 0, 120, '…', 'UTF-8'),
+            'created_at'   => $c->created_at,
+            'article_slug' => $c->article?->slug,
+            'comment_id'   => $c->id,
+            'url'          => $c->article?->slug ? url("/articles/{$c->article->slug}#comment-{$c->id}") : null,
+        ];
+    });
+
+    return response()->json([
+        'data' => $data,
+        'meta' => [
+            'current_page' => $page,
+            'per_page'     => $perPage,
+            'total'        => $total,
+            'last_page'    => $last,
+        ],
+    ]);
+}
+
 }

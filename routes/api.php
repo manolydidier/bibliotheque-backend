@@ -252,6 +252,9 @@ Route::middleware('throttle:30,1')->group(function () {
 Route::middleware('auth:sanctum')->group(function () {
     Route::get('/users/{user}/activities', [UserActivityController::class, 'index']);
     Route::get('/me/effective-permissions', [UserActivityController::class, 'me']);
+     Route::get('/activities', [UserActivityController::class, 'all']);
+    Route::get('/moderation/pending-count', [UserActivityController::class, 'pendingCount']);
+    Route::get('/moderation/pending',       [UserActivityController::class, 'pendingList']);
 });
 
 

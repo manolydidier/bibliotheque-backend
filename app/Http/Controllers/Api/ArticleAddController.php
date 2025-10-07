@@ -16,156 +16,180 @@ use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
 use Illuminate\Support\Facades\Storage;
 
-
-
 class ArticleAddController extends Controller
 {
     /**
-     * Store a newly created article in storage.
+     * Règles communes (création).
+     */
+    private function baseStoreRules(): array
+    {
+        return [
+            'title'   => 'required|string|max:255',
+            'slug'    => 'nullable|string|max:255|unique:articles,slug',
+            'excerpt' => 'nullable|string|max:500',
+            'content' => 'required|string',
+
+            'featured_image'     => 'nullable|string|max:255',
+            'featured_image_alt' => 'nullable|string|max:255',
+
+            'status'     => ['nullable', Rule::enum(ArticleStatus::class)],
+            'visibility' => ['nullable', Rule::enum(ArticleVisibility::class)],
+            'password'   => 'nullable|string|max:255|required_if:visibility,' . ArticleVisibility::PASSWORD_PROTECTED->value,
+
+            'published_at' => 'nullable|date',
+            'scheduled_at' => 'nullable|date',
+            'expires_at'   => 'nullable|date',
+
+            'is_featured'    => 'nullable|boolean',
+            'is_sticky'      => 'nullable|boolean',
+            'allow_comments' => 'nullable|boolean',
+            'allow_sharing'  => 'nullable|boolean',
+            'allow_rating'   => 'nullable|boolean',
+
+            'author_name'   => 'nullable|string|max:255',
+            'author_bio'    => 'nullable|string',
+            'author_avatar' => 'nullable|string|max:255',
+            'author_id'     => 'nullable|exists:users,id',
+
+            'categories'   => 'nullable|array',
+            'categories.*' => 'exists:categories,id',
+
+            'tags'   => 'nullable|array',
+            'tags.*' => 'exists:tags,id',
+
+            // meta/seo_data peuvent arriver en array (JSON) ou string JSON
+            'meta'     => 'nullable',
+            'seo_data' => 'nullable',
+        ];
+    }
+
+    /**
+     * Règles fichiers.
+     */
+    private function fileRules(): array
+    {
+        return [
+            'featured_image_file' => 'nullable|image|mimes:jpeg,png,jpg,gif,webp|max:2048',
+            'author_avatar_file'  => 'nullable|image|mimes:jpeg,png,jpg,gif,webp|max:1024',
+        ];
+    }
+
+    /**
+     * Store (JSON simple, sans fichiers).
      */
     public function store(Request $request)
     {
-        // Validation des données
-        $validator = Validator::make($request->all(), [
-            'title' => 'required|string|max:255',
-            'slug' => 'nullable|string|max:255|unique:articles,slug',
-            'excerpt' => 'nullable|string|max:500',
-            'content' => 'required|string',
-            'featured_image' => 'nullable|string|max:255',
-            'featured_image_alt' => 'nullable|string|max:255',
-            'status' => ['nullable', Rule::enum(ArticleStatus::class)],
-            'visibility' => ['nullable', Rule::enum(ArticleVisibility::class)],
-            'password' => 'nullable|string|max:255|required_if:visibility,' . ArticleVisibility::PASSWORD_PROTECTED->value,
-            'published_at' => 'nullable|date',
-            'scheduled_at' => 'nullable|date',
-            'expires_at' => 'nullable|date',
-            'is_featured' => 'nullable|boolean',
-            'is_sticky' => 'nullable|boolean',
-            'allow_comments' => 'nullable|boolean',
-            'allow_sharing' => 'nullable|boolean',
-            'allow_rating' => 'nullable|boolean',
-            'author_name' => 'nullable|string|max:255',
-            'author_bio' => 'nullable|string',
-            'author_avatar' => 'nullable|string|max:255',
-            'author_id' => 'nullable|exists:users,id',
-            'categories' => 'nullable|array',
-            'categories.*' => 'exists:categories,id',
-            'tags' => 'nullable|array',
-            'tags.*' => 'exists:tags,id',
-            'meta' => 'nullable|array',
-            'seo_data' => 'nullable|array',
-        ]);
+        $validator = Validator::make($request->all(), $this->baseStoreRules());
 
         if ($validator->fails()) {
             return response()->json([
                 'message' => 'Validation failed',
-                'errors' => $validator->errors()
+                'errors'  => $validator->errors()
             ], 422);
         }
 
         try {
             DB::beginTransaction();
 
-            // Préparation des données
             $articleData = $request->only([
-                'title',
-                'slug',
-                'excerpt',
-                'content',
-                'featured_image',
-                'featured_image_alt',
-                'status',
-                'visibility',
-                'password',
-                'published_at',
-                'scheduled_at',
-                'expires_at',
-                'is_featured',
-                'is_sticky',
-                'allow_comments',
-                'allow_sharing',
-                'allow_rating',
-                'author_name',
-                'author_bio',
-                'author_avatar',
-                'author_id',
-                'meta',
-                'seo_data'
+                'title','slug','excerpt','content',
+                'featured_image','featured_image_alt',
+                'status','visibility','password',
+                'published_at','scheduled_at','expires_at',
+                'is_featured','is_sticky','allow_comments','allow_sharing','allow_rating',
+                'author_name','author_bio','author_avatar','author_id',
+                'meta','seo_data',
+                'tenant_id'
             ]);
 
-            // Ajout des données utilisateur
+            // Normaliser meta/seo_data si envoyés en string JSON
+            foreach (['meta','seo_data'] as $jsonish) {
+                if (isset($articleData[$jsonish]) && is_string($articleData[$jsonish])) {
+                    $decoded = json_decode($articleData[$jsonish], true);
+                    if (json_last_error() === JSON_ERROR_NONE) {
+                        $articleData[$jsonish] = $decoded;
+                    }
+                }
+            }
+
+            // user / tenant / author par défaut
             $user = Auth::user();
             $articleData['created_by'] = $user->id;
             $articleData['updated_by'] = $user->id;
+            $articleData['tenant_id']  = $articleData['tenant_id'] ?? ($user->tenant_id ?? null);
+            $articleData['author_id']  = $articleData['author_id'] ?? $user->id;
 
-            // Gestion du tenant_id (à adapter selon votre logique d'authentification)
-            if (empty($articleData['tenant_id'])) {
-                $articleData['tenant_id'] = $user->tenant_id ?? null;
-            }
-
-            // Gestion de l'auteur par défaut
-            if (empty($articleData['author_id'])) {
-                $articleData['author_id'] = $user->id;
-            }
-
-            // Création de l'article
             $article = Article::create($articleData);
 
-            // Attachement des catégories
+            // Catégories
             if ($request->has('categories')) {
-                $categoriesData = [];
-                foreach ($request->categories as $index => $categoryId) {
-                    $categoriesData[$categoryId] = [
-                        'is_primary' => $index === 0, // Première catégorie = primaire
-                        'sort_order' => $index
-                    ];
+                $categories = $request->input('categories');
+                if (is_string($categories)) {
+                    $decoded = json_decode($categories, true);
+                    $categories = json_last_error() === JSON_ERROR_NONE
+                        ? $decoded
+                        : array_map('intval', array_filter(explode(',', $categories)));
                 }
-                $article->categories()->attach($categoriesData);
+                if (is_array($categories) && !empty($categories)) {
+                    $pivot = [];
+                    foreach ($categories as $i => $id) {
+                        $pivot[$id] = ['is_primary' => $i === 0, 'sort_order' => $i];
+                    }
+                    $article->categories()->attach($pivot);
+                }
             }
 
-            // Attachement des tags
+            // Tags
             if ($request->has('tags')) {
-                $tagsData = [];
-                foreach ($request->tags as $index => $tagId) {
-                    $tagsData[$tagId] = ['sort_order' => $index];
+                $tags = $request->input('tags');
+                if (is_string($tags)) {
+                    $decoded = json_decode($tags, true);
+                    $tags = json_last_error() === JSON_ERROR_NONE
+                        ? $decoded
+                        : array_map('intval', array_filter(explode(',', $tags)));
                 }
-                $article->tags()->attach($tagsData);
+                if (is_array($tags) && !empty($tags)) {
+                    $pivot = [];
+                    foreach ($tags as $i => $id) {
+                        $pivot[$id] = ['sort_order' => $i];
+                    }
+                    $article->tags()->attach($pivot);
+                }
             }
 
             DB::commit();
 
-            // Charger les relations pour la réponse
             $article->load(['categories', 'tags', 'author', 'createdBy']);
 
             return response()->json([
                 'message' => 'Article créé avec succès',
-                'data' => $article
+                'data'    => $article
             ], 201);
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
             DB::rollBack();
 
             return response()->json([
                 'message' => 'Erreur lors de la création de l\'article',
-                'error' => $e->getMessage()
+                'error'   => $e->getMessage()
             ], 500);
         }
     }
 
     /**
-     * Store with file upload handling (version alternative)
+     * Store avec upload de fichiers (multipart/form-data).
+     * ⚠️ Valide AUSSI les champs de base pour éviter les 500.
      */
     public function storeWithFiles(Request $request)
     {
-        // Validation supplémentaire pour les fichiers
-        $validator = Validator::make($request->all(), [
-            'featured_image_file' => 'nullable|image|mimes:jpeg,png,jpg,gif|max:2048',
-            'author_avatar_file' => 'nullable|image|mimes:jpeg,png,jpg,gif|max:1024',
-        ]);
+        $validator = Validator::make(
+            $request->all(),
+            array_merge($this->baseStoreRules(), $this->fileRules())
+        );
 
         if ($validator->fails()) {
             return response()->json([
                 'message' => 'Validation failed',
-                'errors' => $validator->errors()
+                'errors'  => $validator->errors()
             ], 422);
         }
 
@@ -174,85 +198,68 @@ class ArticleAddController extends Controller
 
             $articleData = $request->except(['featured_image_file', 'author_avatar_file', 'categories', 'tags']);
 
-            // Gestion de l'upload de l'image featured
+            // Normaliser meta/seo_data si string JSON
+            foreach (['meta','seo_data'] as $jsonish) {
+                if (isset($articleData[$jsonish]) && is_string($articleData[$jsonish])) {
+                    $decoded = json_decode($articleData[$jsonish], true);
+                    if (json_last_error() === JSON_ERROR_NONE) {
+                        $articleData[$jsonish] = $decoded;
+                    }
+                }
+            }
+
+            // Uploads
             if ($request->hasFile('featured_image_file')) {
                 $path = $request->file('featured_image_file')->store('articles/featured', 'public');
                 $articleData['featured_image'] = $path;
             }
-
-            // Gestion de l'upload de l'avatar auteur
             if ($request->hasFile('author_avatar_file')) {
                 $path = $request->file('author_avatar_file')->store('articles/authors', 'public');
                 $articleData['author_avatar'] = $path;
             }
 
-            // Suite identique à la méthode store...
+            // user / tenant / author par défaut
             $user = Auth::user();
             $articleData['created_by'] = $user->id;
             $articleData['updated_by'] = $user->id;
-
-            if (empty($articleData['tenant_id'])) {
-                $articleData['tenant_id'] = $user->tenant_id ?? null;
-            }
-
-            if (empty($articleData['author_id'])) {
-                $articleData['author_id'] = $user->id;
-            }
+            $articleData['tenant_id']  = $articleData['tenant_id'] ?? ($user->tenant_id ?? null);
+            $articleData['author_id']  = $articleData['author_id'] ?? $user->id;
 
             $article = Article::create($articleData);
 
-            // CORRECTION : Attachement des catégories avec vérification du type
+            // Catégories
             if ($request->has('categories')) {
-                $categories = $request->categories;
-
-                // Si categories est une string, convertir en array
+                $categories = $request->input('categories');
                 if (is_string($categories)) {
-                    // Essayez de décoder JSON d'abord
                     $decoded = json_decode($categories, true);
-                    if (json_last_error() === JSON_ERROR_NONE) {
-                        $categories = $decoded;
-                    } else {
-                        // Sinon, split par des virgules
-                        $categories = array_map('intval', array_filter(explode(',', $categories)));
-                    }
+                    $categories = json_last_error() === JSON_ERROR_NONE
+                        ? $decoded
+                        : array_map('intval', array_filter(explode(',', $categories)));
                 }
-
-                // S'assurer que c'est un array avant de faire le foreach
                 if (is_array($categories) && !empty($categories)) {
-                    $categoriesData = [];
-                    foreach ($categories as $index => $categoryId) {
-                        $categoriesData[$categoryId] = [
-                            'is_primary' => $index === 0,
-                            'sort_order' => $index
-                        ];
+                    $pivot = [];
+                    foreach ($categories as $i => $id) {
+                        $pivot[$id] = ['is_primary' => $i === 0, 'sort_order' => $i];
                     }
-                    $article->categories()->attach($categoriesData);
+                    $article->categories()->attach($pivot);
                 }
             }
 
-            // CORRECTION : Attachement des tags avec vérification du type
+            // Tags
             if ($request->has('tags')) {
-                $tags = $request->tags;
-
-                // Si tags est une string, convertir en array
+                $tags = $request->input('tags');
                 if (is_string($tags)) {
-                    // Essayez de décoder JSON d'abord
                     $decoded = json_decode($tags, true);
-                    if (json_last_error() === JSON_ERROR_NONE) {
-                        $tags = $decoded;
-                    } else {
-                        // Sinon, split par des virgules
-                        $tags = array_map('intval', array_filter(explode(',', $tags)));
-                    }
+                    $tags = json_last_error() === JSON_ERROR_NONE
+                        ? $decoded
+                        : array_map('intval', array_filter(explode(',', $tags)));
                 }
-
-                // S'assurer que c'est un array avant de faire le foreach
                 if (is_array($tags) && !empty($tags)) {
-                    $tagsData = [];
-                    foreach ($tags as $index => $tagId) {
-                        $tagsData[$tagId] = ['sort_order' => $index];
+                    $pivot = [];
+                    foreach ($tags as $i => $id) {
+                        $pivot[$id] = ['sort_order' => $i];
                     }
-                    $article->tags()->attach($tagsData);
+                    $article->tags()->attach($pivot);
                 }
             }
 
@@ -262,24 +269,23 @@ class ArticleAddController extends Controller
 
             return response()->json([
                 'message' => 'Article créé avec succès',
-                'data' => $article
+                'data'    => $article
             ], 201);
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
             DB::rollBack();
 
             return response()->json([
                 'message' => 'Erreur lors de la création de l\'article',
-                'error' => $e->getMessage()
+                'error'   => $e->getMessage()
             ], 500);
         }
     }
 
-      /**
-     * Update the specified article.
+    /**
+     * Update (JSON simple).
      */
     public function update(Request $request, $id)
     {
-        // Validation des données
         $validator = Validator::make($request->all(), [
             'title' => 'sometimes|required|string|max:255',
             'slug' => 'sometimes|nullable|string|max:255|unique:articles,slug,' . $id,
@@ -313,7 +319,7 @@ class ArticleAddController extends Controller
         if ($validator->fails()) {
             return response()->json([
                 'message' => 'Validation failed',
-                'errors' => $validator->errors()
+                'errors'  => $validator->errors()
             ], 422);
         }
 
@@ -323,100 +329,84 @@ class ArticleAddController extends Controller
             $article = Article::find($id);
 
             if (!$article) {
-                return response()->json([
-                    'message' => 'Article non trouvé'
-                ], 404);
+                return response()->json(['message' => 'Article non trouvé'], 404);
             }
 
-            // Préparation des données
             $articleData = $request->only([
-                'title', 'slug', 'excerpt', 'content', 'featured_image', 
-                'featured_image_alt', 'status', 'visibility', 'password',
-                'published_at', 'scheduled_at', 'expires_at', 'is_featured',
-                'is_sticky', 'allow_comments', 'allow_sharing', 'allow_rating',
-                'author_name', 'author_bio', 'author_avatar', 'author_id',
-                'meta', 'seo_data'
+                'title','slug','excerpt','content',
+                'featured_image','featured_image_alt',
+                'status','visibility','password',
+                'published_at','scheduled_at','expires_at',
+                'is_featured','is_sticky','allow_comments','allow_sharing','allow_rating',
+                'author_name','author_bio','author_avatar','author_id',
+                'meta','seo_data'
             ]);
 
-            // Mise à jour de l'utilisateur qui modifie
             $user = Auth::user();
             $articleData['updated_by'] = $user->id;
 
-            // Mise à jour de l'article
             $article->update($articleData);
 
-            // Mise à jour des catégories
+            // Catégories
             if ($request->has('categories')) {
-                $categories = $request->categories;
-                
+                $categories = $request->input('categories');
                 if (is_string($categories)) {
                     $categories = json_decode($categories, true) ?? [];
                 }
-                
-                if (is_array($categories) && !empty($categories)) {
-                    $categoriesData = [];
-                    foreach ($categories as $index => $categoryId) {
-                        $categoriesData[$categoryId] = [
-                            'is_primary' => $index === 0,
-                            'sort_order' => $index
-                        ];
+                if (is_array($categories)) {
+                    $pivot = [];
+                    foreach ($categories as $i => $idCat) {
+                        $pivot[$idCat] = ['is_primary' => $i === 0, 'sort_order' => $i];
                     }
-                    $article->categories()->sync($categoriesData);
+                    $article->categories()->sync($pivot);
                 }
             }
 
-            // Mise à jour des tags
+            // Tags
             if ($request->has('tags')) {
-                $tags = $request->tags;
-                
+                $tags = $request->input('tags');
                 if (is_string($tags)) {
                     $tags = json_decode($tags, true) ?? [];
                 }
-                
-                if (is_array($tags) && !empty($tags)) {
-                    $tagsData = [];
-                    foreach ($tags as $index => $tagId) {
-                        $tagsData[$tagId] = ['sort_order' => $index];
+                if (is_array($tags)) {
+                    $pivot = [];
+                    foreach ($tags as $i => $idTag) {
+                        $pivot[$idTag] = ['sort_order' => $i];
                     }
-                    $article->tags()->sync($tagsData);
+                    $article->tags()->sync($pivot);
                 }
             }
 
             DB::commit();
 
-            // Recharger les relations
             $article->load(['categories', 'tags', 'author', 'createdBy', 'updatedBy']);
 
             return response()->json([
                 'message' => 'Article mis à jour avec succès',
-                'data' => $article
+                'data'    => $article
             ]);
 
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
             DB::rollBack();
-            
+
             return response()->json([
                 'message' => 'Erreur lors de la mise à jour de l\'article',
-                'error' => $e->getMessage()
+                'error'   => $e->getMessage()
             ], 500);
         }
     }
 
     /**
-     * Update article with files.
+     * Update avec fichiers (multipart/form-data).
      */
     public function updateWithFiles(Request $request, $id)
     {
-        // Validation supplémentaire pour les fichiers
-        $validator = Validator::make($request->all(), [
-            'featured_image_file' => 'nullable|image|mimes:jpeg,png,jpg,gif|max:2048',
-            'author_avatar_file' => 'nullable|image|mimes:jpeg,png,jpg,gif|max:1024',
-        ]);
+        $validator = Validator::make($request->all(), $this->fileRules());
 
         if ($validator->fails()) {
             return response()->json([
                 'message' => 'Validation failed',
-                'errors' => $validator->errors()
+                'errors'  => $validator->errors()
             ], 422);
         }
 
@@ -424,77 +414,61 @@ class ArticleAddController extends Controller
             DB::beginTransaction();
 
             $article = Article::find($id);
-
             if (!$article) {
-                return response()->json([
-                    'message' => 'Article non trouvé'
-                ], 404);
+                return response()->json(['message' => 'Article non trouvé'], 404);
             }
 
             $articleData = $request->except(['featured_image_file', 'author_avatar_file', 'categories', 'tags']);
 
-            // Gestion de l'upload de l'image featured
+            // Uploads
             if ($request->hasFile('featured_image_file')) {
-                // Supprimer l'ancienne image si elle existe
                 if ($article->featured_image) {
                     Storage::disk('public')->delete($article->featured_image);
                 }
-                
                 $path = $request->file('featured_image_file')->store('articles/featured', 'public');
                 $articleData['featured_image'] = $path;
             }
 
-            // Gestion de l'upload de l'avatar auteur
             if ($request->hasFile('author_avatar_file')) {
-                // Supprimer l'ancien avatar si il existe
                 if ($article->author_avatar) {
                     Storage::disk('public')->delete($article->author_avatar);
                 }
-                
                 $path = $request->file('author_avatar_file')->store('articles/authors', 'public');
                 $articleData['author_avatar'] = $path;
             }
 
-            // Mise à jour de l'utilisateur qui modifie
             $user = Auth::user();
             $articleData['updated_by'] = $user->id;
 
-            // Mise à jour de l'article
             $article->update($articleData);
 
-            // Mise à jour des catégories et tags (même logique que dans update)
+            // Catégories
             if ($request->has('categories')) {
-                $categories = $request->categories;
-                
+                $categories = $request->input('categories');
                 if (is_string($categories)) {
                     $categories = json_decode($categories, true) ?? [];
                 }
-                
-                if (is_array($categories) && !empty($categories)) {
-                    $categoriesData = [];
-                    foreach ($categories as $index => $categoryId) {
-                        $categoriesData[$categoryId] = [
-                            'is_primary' => $index === 0,
-                            'sort_order' => $index
-                        ];
+                if (is_array($categories)) {
+                    $pivot = [];
+                    foreach ($categories as $i => $idCat) {
+                        $pivot[$idCat] = ['is_primary' => $i === 0, 'sort_order' => $i];
                     }
-                    $article->categories()->sync($categoriesData);
+                    $article->categories()->sync($pivot);
                 }
             }
 
+            // Tags
             if ($request->has('tags')) {
-                $tags = $request->tags;
-                
+                $tags = $request->input('tags');
                 if (is_string($tags)) {
                     $tags = json_decode($tags, true) ?? [];
                 }
-                
-                if (is_array($tags) && !empty($tags)) {
-                    $tagsData = [];
-                    foreach ($tags as $index => $tagId) {
-                        $tagsData[$tagId] = ['sort_order' => $index];
+                if (is_array($tags)) {
+                    $pivot = [];
+                    foreach ($tags as $i => $idTag) {
+                        $pivot[$idTag] = ['sort_order' => $i];
                     }
-                    $article->tags()->sync($tagsData);
+                    $article->tags()->sync($pivot);
                 }
             }
 
@@ -504,21 +478,21 @@ class ArticleAddController extends Controller
 
             return response()->json([
                 'message' => 'Article mis à jour avec succès',
-                'data' => $article
+                'data'    => $article
             ]);
 
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
             DB::rollBack();
-            
+
             return response()->json([
                 'message' => 'Erreur lors de la mise à jour de l\'article',
-                'error' => $e->getMessage()
+                'error'   => $e->getMessage()
             ], 500);
         }
     }
 
     /**
-     * Remove the specified article permanently.
+     * Suppression définitive.
      */
     public function destroy($id)
     {
@@ -528,12 +502,9 @@ class ArticleAddController extends Controller
             $article = Article::find($id);
 
             if (!$article) {
-                return response()->json([
-                    'message' => 'Article non trouvé'
-                ], 404);
+                return response()->json(['message' => 'Article non trouvé'], 404);
             }
 
-            // Supprimer les fichiers associés
             if ($article->featured_image) {
                 Storage::disk('public')->delete($article->featured_image);
             }
@@ -541,31 +512,27 @@ class ArticleAddController extends Controller
                 Storage::disk('public')->delete($article->author_avatar);
             }
 
-            // Supprimer les relations
             $article->categories()->detach();
             $article->tags()->detach();
 
-            // Supprimer l'article définitivement
             $article->forceDelete();
 
             DB::commit();
 
-            return response()->json([
-                'message' => 'Article supprimé définitivement avec succès'
-            ]);
+            return response()->json(['message' => 'Article supprimé définitivement avec succès']);
 
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
             DB::rollBack();
-            
+
             return response()->json([
                 'message' => 'Erreur lors de la suppression de l\'article',
-                'error' => $e->getMessage()
+                'error'   => $e->getMessage()
             ], 500);
         }
     }
 
     /**
-     * Soft delete the specified article.
+     * Soft delete.
      */
     public function softDelete($id)
     {
@@ -573,27 +540,23 @@ class ArticleAddController extends Controller
             $article = Article::find($id);
 
             if (!$article) {
-                return response()->json([
-                    'message' => 'Article non trouvé'
-                ], 404);
+                return response()->json(['message' => 'Article non trouvé'], 404);
             }
 
             $article->delete();
 
-            return response()->json([
-                'message' => 'Article supprimé avec succès (soft delete)'
-            ]);
+            return response()->json(['message' => 'Article supprimé avec succès (soft delete)']);
 
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
             return response()->json([
                 'message' => 'Erreur lors de la suppression de l\'article',
-                'error' => $e->getMessage()
+                'error'   => $e->getMessage()
             ], 500);
         }
     }
 
     /**
-     * Restore a soft deleted article.
+     * Restore soft delete.
      */
     public function restore($id)
     {
@@ -601,28 +564,26 @@ class ArticleAddController extends Controller
             $article = Article::withTrashed()->find($id);
 
             if (!$article) {
-                return response()->json([
-                    'message' => 'Article non trouvé'
-                ], 404);
+                return response()->json(['message' => 'Article non trouvé'], 404);
             }
 
             $article->restore();
 
             return response()->json([
                 'message' => 'Article restauré avec succès',
-                'data' => $article
+                'data'    => $article
             ]);
 
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
             return response()->json([
                 'message' => 'Erreur lors de la restauration de l\'article',
-                'error' => $e->getMessage()
+                'error'   => $e->getMessage()
             ], 500);
         }
     }
 
     /**
-     * Get trashed articles.
+     * Liste corbeille (paginée).
      */
     public function trashed(Request $request)
     {
@@ -631,19 +592,18 @@ class ArticleAddController extends Controller
                 ->with(['categories', 'tags', 'author'])
                 ->orderBy('deleted_at', 'desc');
 
-            // Pagination
-            $perPage = $request->get('per_page', 15);
+            $perPage  = $request->get('per_page', 15);
             $articles = $query->paginate($perPage);
 
             return response()->json([
                 'message' => 'Articles supprimés récupérés avec succès',
-                'data' => $articles
+                'data'    => $articles
             ]);
 
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
             return response()->json([
                 'message' => 'Erreur lors de la récupération des articles supprimés',
-                'error' => $e->getMessage()
+                'error'   => $e->getMessage()
             ], 500);
         }
     }
