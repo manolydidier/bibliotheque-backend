@@ -15,6 +15,7 @@ use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Facades\Log;
 
 class ArticleAddController extends Controller
 {
@@ -534,77 +535,125 @@ class ArticleAddController extends Controller
     /**
      * Soft delete.
      */
-    public function softDelete($id)
-    {
-        try {
-            $article = Article::find($id);
+  public function softDelete($id)
+{
+    try {
+        $affected = \App\Models\Article::whereKey($id)->update([
+            'status'     => 'draft',
+            'deleted_at' => now(),   // Carbon::now()
+            'updated_at' => now(),
+        ]);
 
-            if (!$article) {
-                return response()->json(['message' => 'Article non trouvé'], 404);
-            }
-
-            $article->delete();
-
-            return response()->json(['message' => 'Article supprimé avec succès (soft delete)']);
-
-        } catch (\Throwable $e) {
-            return response()->json([
-                'message' => 'Erreur lors de la suppression de l\'article',
-                'error'   => $e->getMessage()
-            ], 500);
+        if (!$affected) {
+            return response()->json(['message' => 'Article non trouvé'], 404);
         }
+
+        return response()->json([
+            'message' => 'Article passé en draft et marqué comme supprimé (deleted_at)',
+            'id'      => $id,
+        ]);
+    } catch (\Throwable $e) {
+        return response()->json([
+            'message' => 'Erreur lors de la mise à jour de l’article',
+            'error'   => $e->getMessage(),
+        ], 500);
     }
+}
 
     /**
      * Restore soft delete.
      */
-    public function restore($id)
-    {
-        try {
-            $article = Article::withTrashed()->find($id);
+public function restore($id)
+{
+    try {
+        $article = Article::withTrashed()->find($id);
 
-            if (!$article) {
-                return response()->json(['message' => 'Article non trouvé'], 404);
-            }
-
-            $article->restore();
-
-            return response()->json([
-                'message' => 'Article restauré avec succès',
-                'data'    => $article
-            ]);
-
-        } catch (\Throwable $e) {
-            return response()->json([
-                'message' => 'Erreur lors de la restauration de l\'article',
-                'error'   => $e->getMessage()
-            ], 500);
+        if (!$article) {
+            return response()->json(['message' => 'Article non trouvé'], 404);
         }
+
+        // Restaure l'élément (deleted_at = null)
+        $article->restore();
+
+        // Force le statut à "published"
+        $article->status = 'published';
+        $article->save();
+
+        // (optionnel) recharger les relations pour la réponse
+        $article->load(['categories', 'tags', 'author']);
+
+        return response()->json([
+            'message' => 'Article restauré avec succès',
+            'data'    => $article,
+        ]);
+
+    } catch (\Throwable $e) {
+        return response()->json([
+            'message' => 'Erreur lors de la restauration de l\'article',
+            'error'   => $e->getMessage(),
+        ], 500);
     }
+}
 
     /**
      * Liste corbeille (paginée).
      */
-    public function trashed(Request $request)
-    {
-        try {
-            $query = Article::onlyTrashed()
-                ->with(['categories', 'tags', 'author'])
-                ->orderBy('deleted_at', 'desc');
+public function corbeille(Request $request)
+{
+    $t0 = microtime(true);
 
-            $perPage  = $request->get('per_page', 15);
-            $articles = $query->paginate($perPage);
+    try {
+        $perPage = (int) $request->get('per_page', 15);
 
-            return response()->json([
-                'message' => 'Articles supprimés récupérés avec succès',
-                'data'    => $articles
+        $query = Article::onlyTrashed()
+            ->with(['categories', 'tags', 'author'])
+            ->orderByDesc('deleted_at');
+
+        if ($request->filled('search')) {
+            $s = $request->query('search');
+            $query->where(function ($q) use ($s) {
+                $q->where('title', 'like', "%{$s}%")
+                  ->orWhere('excerpt', 'like', "%{$s}%")
+                  ->orWhere('content', 'like', "%{$s}%");
+            });
+        }
+        if ($request->filled('status')) {
+            $query->where('status', $request->query('status'));
+        }
+
+        $paginator = $query->paginate($perPage);
+
+        // === LOG RÉSULTAT (résumé + échantillon) ===
+        $ms = (int) ((microtime(true) - $t0) * 1000);
+        $sample = collect($paginator->items())
+            ->take(3)
+            ->map(fn($a) => [
+                'id'    => $a->id,
+                'title' => Str::limit($a->title ?? '', 60),
+                'status'=> $a->status,
+                'deleted_at' => $a->deleted_at,
             ]);
 
-        } catch (\Throwable $e) {
-            return response()->json([
-                'message' => 'Erreur lors de la récupération des articles supprimés',
-                'error'   => $e->getMessage()
-            ], 500);
-        }
+        return response()->json([
+            'message' => 'Corbeille récupérée avec succès',
+            'data'    => $paginator,
+        ]);
+    } catch (\Throwable $e) {
+        // LOG ERREUR (avec contexte requête)
+        Log::error('Erreur corbeille', [
+            'user_id' => optional($request->user())->id,
+            'ip'      => $request->ip(),
+            'query'   => $request->only(['page','per_page','search','status']),
+            'error'   => $e->getMessage(),
+            // 'trace' => $e->getTraceAsString(), // décommente en dev si besoin
+        ]);
+
+        return response()->json([
+            'message' => 'Erreur lors de la récupération de la corbeille',
+            'error'   => $e->getMessage(),
+        ], 500);
     }
+}
+
+
 }

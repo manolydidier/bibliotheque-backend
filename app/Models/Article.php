@@ -61,8 +61,8 @@ class Article extends Model
 
     // Clé primaire = entier auto-increment (par défaut), donc pas besoin de HasUuids
     protected $casts = [
-        'meta' => 'array',
-        'seo_data' => 'array',
+        // 'meta' => 'array',
+        // 'seo_data' => 'array',
         'status' => ArticleStatus::class,
         'visibility' => ArticleVisibility::class,
         'published_at' => 'datetime',
@@ -81,6 +81,7 @@ class Article extends Model
         'allow_sharing' => 'boolean',
         'allow_rating' => 'boolean',
         'reviewed_at' => 'datetime',
+         'password' => 'hashed',
     ];
 
     protected $attributes = [

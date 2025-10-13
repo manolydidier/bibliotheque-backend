@@ -157,13 +157,13 @@ Route::post('comments/{comment}/feature', [CommentController::class, 'feature'])
 //========================================= ADD ARTICLE, DELETE, UPDATE
 
 Route::middleware('auth:sanctum')->group(function () {
-    Route::get('/articles/trashed', [ArticleAddController::class, 'trashed']);
     Route::get('/articles/{id}', [ArticleAddController::class, 'show']);
     Route::put('/articles/{id}', [ArticleAddController::class, 'update']);
     Route::post('/articles/{id}/update-with-files', [ArticleAddController::class, 'updateWithFiles']);
-    Route::delete('/articles/{id}', [ArticleAddController::class, 'destroy']);
-    Route::delete('/articles/{id}/soft-delete', [ArticleAddController::class, 'softDelete']);
+    Route::delete('/articles/{id}/hard-delete', [ArticleAddController::class, 'destroy']);
+    Route::post('/articles/{id}/soft-delete', [ArticleAddController::class, 'softDelete']);
     Route::post('/articles/{id}/restore', [ArticleAddController::class, 'restore']);
+    Route::get('/corbeille', [ArticleAddController::class, 'corbeille']);
     
 
     Route::post('/articlesstore', [ArticleAddController::class, 'store']);
