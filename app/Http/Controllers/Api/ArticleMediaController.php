@@ -367,8 +367,8 @@ class ArticleMediaController extends Controller
             $media->alt_text = $request->alt_text;
             $media->caption = $request->caption;
             $media->is_featured = $request->is_featured ?? false;
-            $media->created_by = auth()->id();
-            $media->updated_by = auth()->id();
+            $media->created_by = Auth::id();
+            $media->updated_by = Auth::id();
             
             // Traitement spécifique selon le type
             if ($type === MediaType::IMAGE) {

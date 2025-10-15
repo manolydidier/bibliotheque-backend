@@ -19,8 +19,102 @@ use Illuminate\Support\Facades\Log;
 
 class ArticleAddController extends Controller
 {
+    /* =========================================================
+       Helpers SEO & payload
+    ==========================================================*/
+
+    /**
+     * Décoder les champs JSON envoyés en string (JSON) et normaliser seo_data.
+     * - Accepte aussi robots_index / robots_follow (à l'intérieur de seo_data) et les range dans robots[index|follow].
+     * - Supprime les clés SEO inutiles (keywords, og_*, etc.) pour ne garder que le schéma minimal.
+     * - Tronque proprement title/description aux longueurs usuelles.
+     */
+    private function preparePayload(array $input, ?Article $article = null): array
+    {
+        // Décodage JSON-ish
+        foreach (['meta', 'seo_data'] as $jsonish) {
+            if (array_key_exists($jsonish, $input) && is_string($input[$jsonish])) {
+                $decoded = json_decode($input[$jsonish], true);
+                if (json_last_error() === JSON_ERROR_NONE) {
+                    $input[$jsonish] = $decoded;
+                }
+            }
+        }
+
+        // Normalisation SEO minimale
+        if (isset($input['seo_data']) && is_array($input['seo_data'])) {
+            $input['seo_data'] = $this->cleanSeoData($input['seo_data'], $input, $article);
+        }
+
+        return $input;
+    }
+
+    /**
+     * Nettoie/normalise l'objet seo_data:
+     *  - meta_title: string <=60 (fallback: title)
+     *  - meta_description: string <=160 (fallback: excerpt)
+     *  - canonical_url: URL valide ou null
+     *  - robots: { index: bool, follow: bool } (fallback true/true)
+     *  - supprime toute autre clé (keywords, og_*, twitter:*, etc.)
+     */
+    private function cleanSeoData(array $seo, array $rawInput = [], ?Article $article = null): array
+    {
+        $titleFallback = $rawInput['title'] ?? ($article?->title ?? '');
+        $excerptFallback = $rawInput['excerpt'] ?? ($article?->excerpt ?? '');
+
+        // Récup index/follow sous différentes formes
+        $robotsArr = isset($seo['robots']) && is_array($seo['robots']) ? $seo['robots'] : [];
+        $robotsIndex  = $robotsArr['index']  ?? ($seo['robots_index']  ?? true);
+        $robotsFollow = $robotsArr['follow'] ?? ($seo['robots_follow'] ?? true);
+
+        // Canonical: valider l'URL (sinon null)
+        $canonical = $seo['canonical_url'] ?? null;
+        $canonical = (is_string($canonical) && filter_var($canonical, FILTER_VALIDATE_URL)) ? $canonical : null;
+
+        $metaTitle = trim((string) ($seo['meta_title'] ?? $titleFallback));
+        $metaDesc  = trim((string) ($seo['meta_description'] ?? $excerptFallback));
+
+        // Tronquages doux (pas de "…", on garde propre)
+        $metaTitle = Str::limit($metaTitle, 60, '');
+        $metaDesc  = Str::limit($metaDesc, 160, '');
+
+        // Construire l'objet final minimal
+        $clean = [
+            'meta_title'       => $metaTitle,
+            'meta_description' => $metaDesc,
+            'canonical_url'    => $canonical,
+            'robots'           => [
+                'index'  => (bool) $robotsIndex,
+                'follow' => (bool) $robotsFollow,
+            ],
+        ];
+
+        return $clean;
+    }
+
+    /**
+     * Convertit une liste d'IDs en array<int> depuis array|string JSON ou "1,2,3".
+     */
+    private function parseIdsList($val): array
+    {
+        if (is_array($val)) return array_values(array_filter(array_map('intval', $val)));
+        if (is_string($val)) {
+            $decoded = json_decode($val, true);
+            if (json_last_error() === JSON_ERROR_NONE && is_array($decoded)) {
+                return array_values(array_filter(array_map('intval', $decoded)));
+            }
+            return array_values(array_filter(array_map('intval', array_map('trim', explode(',', $val)))));
+        }
+        return [];
+    }
+
+    /* =========================================================
+       Règles de validation
+    ==========================================================*/
+
     /**
      * Règles communes (création).
+     * NB: on valide aussi les champs imbriqués de seo_data.*
      */
     private function baseStoreRules(): array
     {
@@ -58,9 +152,16 @@ class ArticleAddController extends Controller
             'tags'   => 'nullable|array',
             'tags.*' => 'exists:tags,id',
 
-            // meta/seo_data peuvent arriver en array (JSON) ou string JSON
-            'meta'     => 'nullable',
-            'seo_data' => 'nullable',
+            // meta/seo_data en array (si string JSON, on le convertit AVANT validation)
+            'meta'     => 'nullable|array',
+            'seo_data' => 'nullable|array',
+            // Règles SEO minimales
+            'seo_data.meta_title'       => 'nullable|string|max:255',
+            'seo_data.meta_description' => 'nullable|string|max:1000',
+            'seo_data.canonical_url'    => 'nullable|url|max:255',
+            'seo_data.robots'           => 'nullable|array',
+            'seo_data.robots.index'     => 'nullable|boolean',
+            'seo_data.robots.follow'    => 'nullable|boolean',
         ];
     }
 
@@ -75,12 +176,15 @@ class ArticleAddController extends Controller
         ];
     }
 
-    /**
-     * Store (JSON simple, sans fichiers).
-     */
+    /* =========================================================
+       Store (JSON)
+    ==========================================================*/
     public function store(Request $request)
     {
-        $validator = Validator::make($request->all(), $this->baseStoreRules());
+        // Préparer/normaliser le payload (décodage JSON + SEO clean)
+        $data = $this->preparePayload($request->all());
+
+        $validator = Validator::make($data, $this->baseStoreRules());
 
         if ($validator->fails()) {
             return response()->json([
@@ -92,7 +196,7 @@ class ArticleAddController extends Controller
         try {
             DB::beginTransaction();
 
-            $articleData = $request->only([
+            $articleData = array_intersect_key($data, array_flip([
                 'title','slug','excerpt','content',
                 'featured_image','featured_image_alt',
                 'status','visibility','password',
@@ -101,17 +205,7 @@ class ArticleAddController extends Controller
                 'author_name','author_bio','author_avatar','author_id',
                 'meta','seo_data',
                 'tenant_id'
-            ]);
-
-            // Normaliser meta/seo_data si envoyés en string JSON
-            foreach (['meta','seo_data'] as $jsonish) {
-                if (isset($articleData[$jsonish]) && is_string($articleData[$jsonish])) {
-                    $decoded = json_decode($articleData[$jsonish], true);
-                    if (json_last_error() === JSON_ERROR_NONE) {
-                        $articleData[$jsonish] = $decoded;
-                    }
-                }
-            }
+            ]));
 
             // user / tenant / author par défaut
             $user = Auth::user();
@@ -123,36 +217,24 @@ class ArticleAddController extends Controller
             $article = Article::create($articleData);
 
             // Catégories
-            if ($request->has('categories')) {
-                $categories = $request->input('categories');
-                if (is_string($categories)) {
-                    $decoded = json_decode($categories, true);
-                    $categories = json_last_error() === JSON_ERROR_NONE
-                        ? $decoded
-                        : array_map('intval', array_filter(explode(',', $categories)));
-                }
-                if (is_array($categories) && !empty($categories)) {
+            if (array_key_exists('categories', $data)) {
+                $categories = $this->parseIdsList($data['categories']);
+                if (!empty($categories)) {
                     $pivot = [];
-                    foreach ($categories as $i => $id) {
-                        $pivot[$id] = ['is_primary' => $i === 0, 'sort_order' => $i];
+                    foreach ($categories as $i => $cid) {
+                        $pivot[$cid] = ['is_primary' => $i === 0, 'sort_order' => $i];
                     }
                     $article->categories()->attach($pivot);
                 }
             }
 
             // Tags
-            if ($request->has('tags')) {
-                $tags = $request->input('tags');
-                if (is_string($tags)) {
-                    $decoded = json_decode($tags, true);
-                    $tags = json_last_error() === JSON_ERROR_NONE
-                        ? $decoded
-                        : array_map('intval', array_filter(explode(',', $tags)));
-                }
-                if (is_array($tags) && !empty($tags)) {
+            if (array_key_exists('tags', $data)) {
+                $tags = $this->parseIdsList($data['tags']);
+                if (!empty($tags)) {
                     $pivot = [];
-                    foreach ($tags as $i => $id) {
-                        $pivot[$id] = ['sort_order' => $i];
+                    foreach ($tags as $i => $tid) {
+                        $pivot[$tid] = ['sort_order' => $i];
                     }
                     $article->tags()->attach($pivot);
                 }
@@ -176,14 +258,16 @@ class ArticleAddController extends Controller
         }
     }
 
-    /**
-     * Store avec upload de fichiers (multipart/form-data).
-     * ⚠️ Valide AUSSI les champs de base pour éviter les 500.
-     */
+    /* =========================================================
+       Store (multipart + fichiers)
+    ==========================================================*/
     public function storeWithFiles(Request $request)
     {
+        // On prépare le payload AVANT validation pour permettre les règles imbriquées
+        $data = $this->preparePayload($request->all());
+
         $validator = Validator::make(
-            $request->all(),
+            $data,
             array_merge($this->baseStoreRules(), $this->fileRules())
         );
 
@@ -197,17 +281,8 @@ class ArticleAddController extends Controller
         try {
             DB::beginTransaction();
 
-            $articleData = $request->except(['featured_image_file', 'author_avatar_file', 'categories', 'tags']);
-
-            // Normaliser meta/seo_data si string JSON
-            foreach (['meta','seo_data'] as $jsonish) {
-                if (isset($articleData[$jsonish]) && is_string($articleData[$jsonish])) {
-                    $decoded = json_decode($articleData[$jsonish], true);
-                    if (json_last_error() === JSON_ERROR_NONE) {
-                        $articleData[$jsonish] = $decoded;
-                    }
-                }
-            }
+            $articleData = $data;
+            unset($articleData['featured_image_file'], $articleData['author_avatar_file'], $articleData['categories'], $articleData['tags']);
 
             // Uploads
             if ($request->hasFile('featured_image_file')) {
@@ -229,36 +304,24 @@ class ArticleAddController extends Controller
             $article = Article::create($articleData);
 
             // Catégories
-            if ($request->has('categories')) {
-                $categories = $request->input('categories');
-                if (is_string($categories)) {
-                    $decoded = json_decode($categories, true);
-                    $categories = json_last_error() === JSON_ERROR_NONE
-                        ? $decoded
-                        : array_map('intval', array_filter(explode(',', $categories)));
-                }
-                if (is_array($categories) && !empty($categories)) {
+            if (array_key_exists('categories', $data)) {
+                $categories = $this->parseIdsList($data['categories']);
+                if (!empty($categories)) {
                     $pivot = [];
-                    foreach ($categories as $i => $id) {
-                        $pivot[$id] = ['is_primary' => $i === 0, 'sort_order' => $i];
+                    foreach ($categories as $i => $cid) {
+                        $pivot[$cid] = ['is_primary' => $i === 0, 'sort_order' => $i];
                     }
                     $article->categories()->attach($pivot);
                 }
             }
 
             // Tags
-            if ($request->has('tags')) {
-                $tags = $request->input('tags');
-                if (is_string($tags)) {
-                    $decoded = json_decode($tags, true);
-                    $tags = json_last_error() === JSON_ERROR_NONE
-                        ? $decoded
-                        : array_map('intval', array_filter(explode(',', $tags)));
-                }
-                if (is_array($tags) && !empty($tags)) {
+            if (array_key_exists('tags', $data)) {
+                $tags = $this->parseIdsList($data['tags']);
+                if (!empty($tags)) {
                     $pivot = [];
-                    foreach ($tags as $i => $id) {
-                        $pivot[$id] = ['sort_order' => $i];
+                    foreach ($tags as $i => $tid) {
+                        $pivot[$tid] = ['sort_order' => $i];
                     }
                     $article->tags()->attach($pivot);
                 }
@@ -282,12 +345,15 @@ class ArticleAddController extends Controller
         }
     }
 
-    /**
-     * Update (JSON simple).
-     */
+    /* =========================================================
+       Update (JSON)
+    ==========================================================*/
     public function update(Request $request, $id)
     {
-        $validator = Validator::make($request->all(), [
+        // Normaliser le payload avant validation
+        $data = $this->preparePayload($request->all());
+
+        $validator = Validator::make($data, [
             'title' => 'sometimes|required|string|max:255',
             'slug' => 'sometimes|nullable|string|max:255|unique:articles,slug,' . $id,
             'excerpt' => 'nullable|string|max:500',
@@ -313,8 +379,16 @@ class ArticleAddController extends Controller
             'categories.*' => 'exists:categories,id',
             'tags' => 'nullable|array',
             'tags.*' => 'exists:tags,id',
-            'meta' => 'nullable|array',
+
+            'meta'     => 'nullable|array',
             'seo_data' => 'nullable|array',
+            // SEO imbriqué
+            'seo_data.meta_title'       => 'nullable|string|max:255',
+            'seo_data.meta_description' => 'nullable|string|max:1000',
+            'seo_data.canonical_url'    => 'nullable|url|max:255',
+            'seo_data.robots'           => 'nullable|array',
+            'seo_data.robots.index'     => 'nullable|boolean',
+            'seo_data.robots.follow'    => 'nullable|boolean',
         ]);
 
         if ($validator->fails()) {
@@ -328,12 +402,11 @@ class ArticleAddController extends Controller
             DB::beginTransaction();
 
             $article = Article::find($id);
-
             if (!$article) {
                 return response()->json(['message' => 'Article non trouvé'], 404);
             }
 
-            $articleData = $request->only([
+            $articleData = array_intersect_key($data, array_flip([
                 'title','slug','excerpt','content',
                 'featured_image','featured_image_alt',
                 'status','visibility','password',
@@ -341,7 +414,7 @@ class ArticleAddController extends Controller
                 'is_featured','is_sticky','allow_comments','allow_sharing','allow_rating',
                 'author_name','author_bio','author_avatar','author_id',
                 'meta','seo_data'
-            ]);
+            ]));
 
             $user = Auth::user();
             $articleData['updated_by'] = $user->id;
@@ -349,33 +422,23 @@ class ArticleAddController extends Controller
             $article->update($articleData);
 
             // Catégories
-            if ($request->has('categories')) {
-                $categories = $request->input('categories');
-                if (is_string($categories)) {
-                    $categories = json_decode($categories, true) ?? [];
+            if (array_key_exists('categories', $data)) {
+                $categories = $this->parseIdsList($data['categories']);
+                $pivot = [];
+                foreach ($categories as $i => $cid) {
+                    $pivot[$cid] = ['is_primary' => $i === 0, 'sort_order' => $i];
                 }
-                if (is_array($categories)) {
-                    $pivot = [];
-                    foreach ($categories as $i => $idCat) {
-                        $pivot[$idCat] = ['is_primary' => $i === 0, 'sort_order' => $i];
-                    }
-                    $article->categories()->sync($pivot);
-                }
+                $article->categories()->sync($pivot);
             }
 
             // Tags
-            if ($request->has('tags')) {
-                $tags = $request->input('tags');
-                if (is_string($tags)) {
-                    $tags = json_decode($tags, true) ?? [];
+            if (array_key_exists('tags', $data)) {
+                $tags = $this->parseIdsList($data['tags']);
+                $pivot = [];
+                foreach ($tags as $i => $tid) {
+                    $pivot[$tid] = ['sort_order' => $i];
                 }
-                if (is_array($tags)) {
-                    $pivot = [];
-                    foreach ($tags as $i => $idTag) {
-                        $pivot[$idTag] = ['sort_order' => $i];
-                    }
-                    $article->tags()->sync($pivot);
-                }
+                $article->tags()->sync($pivot);
             }
 
             DB::commit();
@@ -397,12 +460,25 @@ class ArticleAddController extends Controller
         }
     }
 
-    /**
-     * Update avec fichiers (multipart/form-data).
-     */
+    /* =========================================================
+       Update (multipart + fichiers)
+    ==========================================================*/
     public function updateWithFiles(Request $request, $id)
     {
-        $validator = Validator::make($request->all(), $this->fileRules());
+        // On prépare aussi le payload (seo_data/meta) pour pouvoir accepter multipart string JSON
+        $data = $this->preparePayload($request->all());
+
+        // Valider fichiers (+ optionnellement seo_data propre si présent)
+        $validator = Validator::make($data, array_merge($this->fileRules(), [
+            'meta'     => 'nullable|array',
+            'seo_data' => 'nullable|array',
+            'seo_data.meta_title'       => 'nullable|string|max:255',
+            'seo_data.meta_description' => 'nullable|string|max:1000',
+            'seo_data.canonical_url'    => 'nullable|url|max:255',
+            'seo_data.robots'           => 'nullable|array',
+            'seo_data.robots.index'     => 'nullable|boolean',
+            'seo_data.robots.follow'    => 'nullable|boolean',
+        ]));
 
         if ($validator->fails()) {
             return response()->json([
@@ -419,7 +495,8 @@ class ArticleAddController extends Controller
                 return response()->json(['message' => 'Article non trouvé'], 404);
             }
 
-            $articleData = $request->except(['featured_image_file', 'author_avatar_file', 'categories', 'tags']);
+            $articleData = $data;
+            unset($articleData['featured_image_file'], $articleData['author_avatar_file'], $articleData['categories'], $articleData['tags']);
 
             // Uploads
             if ($request->hasFile('featured_image_file')) {
@@ -444,33 +521,23 @@ class ArticleAddController extends Controller
             $article->update($articleData);
 
             // Catégories
-            if ($request->has('categories')) {
-                $categories = $request->input('categories');
-                if (is_string($categories)) {
-                    $categories = json_decode($categories, true) ?? [];
+            if (array_key_exists('categories', $data)) {
+                $categories = $this->parseIdsList($data['categories']);
+                $pivot = [];
+                foreach ($categories as $i => $cid) {
+                    $pivot[$cid] = ['is_primary' => $i === 0, 'sort_order' => $i];
                 }
-                if (is_array($categories)) {
-                    $pivot = [];
-                    foreach ($categories as $i => $idCat) {
-                        $pivot[$idCat] = ['is_primary' => $i === 0, 'sort_order' => $i];
-                    }
-                    $article->categories()->sync($pivot);
-                }
+                $article->categories()->sync($pivot);
             }
 
             // Tags
-            if ($request->has('tags')) {
-                $tags = $request->input('tags');
-                if (is_string($tags)) {
-                    $tags = json_decode($tags, true) ?? [];
+            if (array_key_exists('tags', $data)) {
+                $tags = $this->parseIdsList($data['tags']);
+                $pivot = [];
+                foreach ($tags as $i => $tid) {
+                    $pivot[$tid] = ['sort_order' => $i];
                 }
-                if (is_array($tags)) {
-                    $pivot = [];
-                    foreach ($tags as $i => $idTag) {
-                        $pivot[$idTag] = ['sort_order' => $i];
-                    }
-                    $article->tags()->sync($pivot);
-                }
+                $article->tags()->sync($pivot);
             }
 
             DB::commit();
@@ -492,9 +559,9 @@ class ArticleAddController extends Controller
         }
     }
 
-    /**
-     * Suppression définitive.
-     */
+    /* =========================================================
+       Destroy (hard delete)
+    ==========================================================*/
     public function destroy($id)
     {
         try {
@@ -532,128 +599,103 @@ class ArticleAddController extends Controller
         }
     }
 
-    /**
-     * Soft delete.
-     */
-  public function softDelete($id)
-{
-    try {
-        $affected = \App\Models\Article::whereKey($id)->update([
-            'status'     => 'draft',
-            'deleted_at' => now(),   // Carbon::now()
-            'updated_at' => now(),
-        ]);
-
-        if (!$affected) {
-            return response()->json(['message' => 'Article non trouvé'], 404);
-        }
-
-        return response()->json([
-            'message' => 'Article passé en draft et marqué comme supprimé (deleted_at)',
-            'id'      => $id,
-        ]);
-    } catch (\Throwable $e) {
-        return response()->json([
-            'message' => 'Erreur lors de la mise à jour de l’article',
-            'error'   => $e->getMessage(),
-        ], 500);
-    }
-}
-
-    /**
-     * Restore soft delete.
-     */
-public function restore($id)
-{
-    try {
-        $article = Article::withTrashed()->find($id);
-
-        if (!$article) {
-            return response()->json(['message' => 'Article non trouvé'], 404);
-        }
-
-        // Restaure l'élément (deleted_at = null)
-        $article->restore();
-
-        // Force le statut à "published"
-        $article->status = 'published';
-        $article->save();
-
-        // (optionnel) recharger les relations pour la réponse
-        $article->load(['categories', 'tags', 'author']);
-
-        return response()->json([
-            'message' => 'Article restauré avec succès',
-            'data'    => $article,
-        ]);
-
-    } catch (\Throwable $e) {
-        return response()->json([
-            'message' => 'Erreur lors de la restauration de l\'article',
-            'error'   => $e->getMessage(),
-        ], 500);
-    }
-}
-
-    /**
-     * Liste corbeille (paginée).
-     */
-public function corbeille(Request $request)
-{
-    $t0 = microtime(true);
-
-    try {
-        $perPage = (int) $request->get('per_page', 15);
-
-        $query = Article::onlyTrashed()
-            ->with(['categories', 'tags', 'author'])
-            ->orderByDesc('deleted_at');
-
-        if ($request->filled('search')) {
-            $s = $request->query('search');
-            $query->where(function ($q) use ($s) {
-                $q->where('title', 'like', "%{$s}%")
-                  ->orWhere('excerpt', 'like', "%{$s}%")
-                  ->orWhere('content', 'like', "%{$s}%");
-            });
-        }
-        if ($request->filled('status')) {
-            $query->where('status', $request->query('status'));
-        }
-
-        $paginator = $query->paginate($perPage);
-
-        // === LOG RÉSULTAT (résumé + échantillon) ===
-        $ms = (int) ((microtime(true) - $t0) * 1000);
-        $sample = collect($paginator->items())
-            ->take(3)
-            ->map(fn($a) => [
-                'id'    => $a->id,
-                'title' => Str::limit($a->title ?? '', 60),
-                'status'=> $a->status,
-                'deleted_at' => $a->deleted_at,
+    /* =========================================================
+       Soft delete / Restore / Corbeille
+    ==========================================================*/
+    public function softDelete($id)
+    {
+        try {
+            $affected = Article::whereKey($id)->update([
+                'status'     => 'draft',
+                'deleted_at' => now(),
+                'updated_at' => now(),
             ]);
 
-        return response()->json([
-            'message' => 'Corbeille récupérée avec succès',
-            'data'    => $paginator,
-        ]);
-    } catch (\Throwable $e) {
-        // LOG ERREUR (avec contexte requête)
-        Log::error('Erreur corbeille', [
-            'user_id' => optional($request->user())->id,
-            'ip'      => $request->ip(),
-            'query'   => $request->only(['page','per_page','search','status']),
-            'error'   => $e->getMessage(),
-            // 'trace' => $e->getTraceAsString(), // décommente en dev si besoin
-        ]);
+            if (!$affected) {
+                return response()->json(['message' => 'Article non trouvé'], 404);
+            }
 
-        return response()->json([
-            'message' => 'Erreur lors de la récupération de la corbeille',
-            'error'   => $e->getMessage(),
-        ], 500);
+            return response()->json([
+                'message' => 'Article passé en draft et marqué comme supprimé (deleted_at)',
+                'id'      => $id,
+            ]);
+        } catch (\Throwable $e) {
+            return response()->json([
+                'message' => 'Erreur lors de la mise à jour de l’article',
+                'error'   => $e->getMessage(),
+            ], 500);
+        }
     }
-}
 
+    public function restore($id)
+    {
+        try {
+            $article = Article::withTrashed()->find($id);
 
+            if (!$article) {
+                return response()->json(['message' => 'Article non trouvé'], 404);
+            }
+
+            $article->restore();
+            $article->status = 'published';
+            $article->save();
+
+            $article->load(['categories', 'tags', 'author']);
+
+            return response()->json([
+                'message' => 'Article restauré avec succès',
+                'data'    => $article,
+            ]);
+
+        } catch (\Throwable $e) {
+            return response()->json([
+                'message' => 'Erreur lors de la restauration de l\'article',
+                'error'   => $e->getMessage(),
+            ], 500);
+        }
+    }
+
+    public function corbeille(Request $request)
+    {
+        $t0 = microtime(true);
+
+        try {
+            $perPage = (int) $request->get('per_page', 15);
+
+            $query = Article::onlyTrashed()
+                ->with(['categories', 'tags', 'author'])
+                ->orderByDesc('deleted_at');
+
+            if ($request->filled('search')) {
+                $s = $request->query('search');
+                $query->where(function ($q) use ($s) {
+                    $q->where('title', 'like', "%{$s}%")
+                      ->orWhere('excerpt', 'like', "%{$s}%")
+                      ->orWhere('content', 'like', "%{$s}%");
+                });
+            }
+            if ($request->filled('status')) {
+                $query->where('status', $request->query('status'));
+            }
+
+            $paginator = $query->paginate($perPage);
+
+            return response()->json([
+                'message' => 'Corbeille récupérée avec succès',
+                'data'    => $paginator,
+            ]);
+        } catch (\Throwable $e) {
+            Log::error('Erreur corbeille', [
+                'user_id' => optional($request->user())->id,
+                'ip'      => $request->ip(),
+                'query'   => $request->only(['page','per_page','search','status']),
+                'error'   => $e->getMessage(),
+            ]);
+
+            return response()->json([
+                'message' => 'Erreur lors de la récupération de la corbeille',
+                'error'   => $e->getMessage(),
+            ], 500);
+        }
+    }
 }

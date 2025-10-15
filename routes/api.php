@@ -24,6 +24,7 @@ use App\Http\Controllers\Api\ShareController;
 use App\Http\Controllers\Api\UserActivityController;
 use Illuminate\Support\Facades\Log;
 use App\Http\Controllers\Api\ArticleAddController;
+use App\Http\Controllers\Api\ArticleMediaController;
 
 Route::get('/user', function (Request $request) {
     return $request->user();
@@ -256,7 +257,36 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/moderation/pending-count', [UserActivityController::class, 'pendingCount']);
     Route::get('/moderation/pending',       [UserActivityController::class, 'pendingList']);
 });
+/*
+|-----------------------------------------------------------------------
+| Article Media (CRUD + actions personnalisées)
+|-----------------------------------------------------------------------
+| Si tu utilises Sanctum : garde 'auth:sanctum'.
+| Sinon, enlève le middleware ou remplace-le par le tien.
+*/
+Route::middleware(['auth:sanctum'])->group(function () {
+    // listing global (optionnel)
+    Route::get('article-media',        [ArticleMediaController::class, 'index']);
+    // CRUD de base
+    Route::post('article-media',       [ArticleMediaController::class, 'store']);
+    Route::get('article-media/{id}',   [ArticleMediaController::class, 'show']);
+    Route::put('article-media/{id}',   [ArticleMediaController::class, 'update']);
+    Route::delete('article-media/{id}',[ArticleMediaController::class, 'destroy']);
 
+    // Upload de fichier
+    Route::post('article-media/upload',               [ArticleMediaController::class, 'upload']);
+
+    // Récupération par article
+    Route::get('article-media/by-article/{articleId}',[ArticleMediaController::class, 'byArticle']);
+
+    // Toggles
+    Route::post('article-media/{id}/toggle-active',   [ArticleMediaController::class, 'toggleActive']);
+    Route::post('article-media/{id}/toggle-featured', [ArticleMediaController::class, 'toggleFeatured']);
+
+    // Restauration / suppression définitive (si soft deletes)
+    Route::post('article-media/{id}/restore',         [ArticleMediaController::class, 'restore']);
+    Route::delete('article-media/{id}/force',         [ArticleMediaController::class, 'forceDelete']);
+});
 
 
 // ========================================
