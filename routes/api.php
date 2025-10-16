@@ -265,27 +265,26 @@ Route::middleware('auth:sanctum')->group(function () {
 | Sinon, enlève le middleware ou remplace-le par le tien.
 */
 Route::middleware(['auth:sanctum'])->group(function () {
-    // listing global (optionnel)
-    Route::get('article-media',        [ArticleMediaController::class, 'index']);
-    // CRUD de base
-    Route::post('article-media',       [ArticleMediaController::class, 'store']);
-    Route::get('article-media/{id}',   [ArticleMediaController::class, 'show']);
-    Route::put('article-media/{id}',   [ArticleMediaController::class, 'update']);
-    Route::delete('article-media/{id}',[ArticleMediaController::class, 'destroy']);
+    // existants…
+    Route::get   ('article-media',                      [ArticleMediaController::class, 'index']);
+    Route::post  ('article-media',                      [ArticleMediaController::class, 'store']);
+    Route::get   ('article-media/{id}',                 [ArticleMediaController::class, 'show']);
+    Route::put   ('article-media/{id}',                 [ArticleMediaController::class, 'update']);
+    Route::delete('article-media/{id}',                 [ArticleMediaController::class, 'destroy']);
 
-    // Upload de fichier
-    Route::post('article-media/upload',               [ArticleMediaController::class, 'upload']);
+    Route::post  ('article-media/upload',               [ArticleMediaController::class, 'upload']);
+    Route::get   ('article-media/by-article/{article}', [ArticleMediaController::class, 'byArticle']);
 
-    // Récupération par article
-    Route::get('article-media/by-article/{articleId}',[ArticleMediaController::class, 'byArticle']);
+    Route::post  ('article-media/{id}/toggle-active',   [ArticleMediaController::class, 'toggleActive']);
+    Route::post  ('article-media/{id}/toggle-featured', [ArticleMediaController::class, 'toggleFeatured']);
 
-    // Toggles
-    Route::post('article-media/{id}/toggle-active',   [ArticleMediaController::class, 'toggleActive']);
-    Route::post('article-media/{id}/toggle-featured', [ArticleMediaController::class, 'toggleFeatured']);
+    Route::post  ('article-media/{id}/restore',         [ArticleMediaController::class, 'restore']);
+    Route::delete('article-media/{id}/force',           [ArticleMediaController::class, 'forceDelete']);
 
-    // Restauration / suppression définitive (si soft deletes)
-    Route::post('article-media/{id}/restore',         [ArticleMediaController::class, 'restore']);
-    Route::delete('article-media/{id}/force',         [ArticleMediaController::class, 'forceDelete']);
+    // NEW: bulk actions
+    Route::post('article-media/bulk/destroy',           [ArticleMediaController::class, 'bulkDestroy']);
+    Route::post('article-media/bulk/toggle-active',     [ArticleMediaController::class, 'bulkToggleActive']);
+    Route::post('article-media/bulk/toggle-featured',   [ArticleMediaController::class, 'bulkToggleFeatured']);
 });
 //     Route::get('/check-php-config', function () {
 //         return response()->json([
