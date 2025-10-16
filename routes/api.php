@@ -287,7 +287,27 @@ Route::middleware(['auth:sanctum'])->group(function () {
     Route::post('article-media/{id}/restore',         [ArticleMediaController::class, 'restore']);
     Route::delete('article-media/{id}/force',         [ArticleMediaController::class, 'forceDelete']);
 });
-
+//     Route::get('/check-php-config', function () {
+//         return response()->json([
+//             'upload_max_filesize' => ini_get('upload_max_filesize'),
+//             'post_max_size' => ini_get('post_max_size'),
+//             'memory_limit' => ini_get('memory_limit'),
+//             'max_execution_time' => ini_get('max_execution_time'),
+//             'max_input_time' => ini_get('max_input_time'),
+//         ]);
+//     });
+// // routes/api.php (ou web.php si tu préfères)
+// Route::get('/_debug/upload-limits', function () {
+//     return response()->json([
+//         'sapi' => php_sapi_name(),                         // doit être "cli-server"
+//         'php' => PHP_VERSION,
+//         'loaded_ini' => php_ini_loaded_file(),            // <- chemin exact du php.ini utilisé
+//         'upload_max_filesize' => ini_get('upload_max_filesize'),
+//         'post_max_size'       => ini_get('post_max_size'),
+//         'user_ini.filename'   => ini_get('user_ini.filename'),
+//         'user_ini.cache_ttl'  => ini_get('user_ini.cache_ttl'),
+//     ]);
+// });
 
 // ========================================
 // MODULE ARTICLES - API ROUTES

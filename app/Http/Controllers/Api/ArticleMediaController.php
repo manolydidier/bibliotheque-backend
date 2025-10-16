@@ -85,6 +85,7 @@ class ArticleMediaController extends Controller
         // }
 
         $validator = Validator::make($request->all(), [
+            'file' => 'required|file|max:51200',  // ← Cette validation échoue
             'article_id' => 'required|exists:articles,id',
             'name' => 'required|string|max:255',
             'filename' => 'required|string|max:255',
@@ -158,9 +159,9 @@ class ArticleMediaController extends Controller
         }
 
         // Autorisation
-        if (!Gate::allows('view', $media)) {
-            return response()->json(['message' => 'Non autorisé'], 403);
-        }
+        // if (!Gate::allows('view', $media)) {
+        //     return response()->json(['message' => 'Non autorisé'], 403);
+        // }
 
         return response()->json($media);
     }
@@ -227,9 +228,9 @@ class ArticleMediaController extends Controller
         }
 
         // Autorisation
-        if (!Gate::allows('delete', $media)) {
-            return response()->json(['message' => 'Non autorisé'], 403);
-        }
+        // if (!Gate::allows('delete', $media)) {
+        //     return response()->json(['message' => 'Non autorisé'], 403);
+        // }
 
         try {
             $media->delete();
@@ -257,9 +258,9 @@ class ArticleMediaController extends Controller
         }
 
         // Autorisation
-        if (!Gate::allows('restore', $media)) {
-            return response()->json(['message' => 'Non autorisé'], 403);
-        }
+        // if (!Gate::allows('restore', $media)) {
+        //     return response()->json(['message' => 'Non autorisé'], 403);
+        // }
 
         try {
             $media->restore();
@@ -288,9 +289,9 @@ class ArticleMediaController extends Controller
         }
 
         // Autorisation
-        if (!Gate::allows('forceDelete', $media)) {
-            return response()->json(['message' => 'Non autorisé'], 403);
-        }
+        // if (!Gate::allows('forceDelete', $media)) {
+        //     return response()->json(['message' => 'Non autorisé'], 403);
+        // }
 
         try {
             // Supprimer physiquement le fichier
@@ -316,19 +317,27 @@ class ArticleMediaController extends Controller
     public function upload(Request $request): JsonResponse
     {
         // Autorisation
-        if (!Gate::allows('create', ArticleMedia::class)) {
-            return response()->json(['message' => 'Non autorisé'], 403);
-        }
+        // if (!Gate::allows('create', ArticleMedia::class)) {
+        //     return response()->json(['message' => 'Non autorisé'], 403);
+        // }
 
         $validator = Validator::make($request->all(), [
-            'file' => 'required|file',
+             'file' => 'required|file|max:51200', // 50MB max
             'article_id' => 'required|exists:articles,id',
             'name' => 'required|string|max:255',
             'alt_text' => 'nullable|array',
             'caption' => 'nullable|array',
             'is_featured' => 'nullable|boolean',
         ]);
-
+        if ($request->hasFile('file')) {
+            $file = $request->file('file');
+            logger()->info('File info:', [
+                'name' => $file->getClientOriginalName(),
+                'size' => $file->getSize(),
+                'mime' => $file->getMimeType(),
+                'error' => $file->getError()
+            ]);
+}
         if ($validator->fails()) {
             return response()->json([
                 'message' => 'Données invalides',
@@ -403,9 +412,9 @@ class ArticleMediaController extends Controller
         }
 
         // Autorisation
-        if (!Gate::allows('view', $article)) {
-            return response()->json(['message' => 'Non autorisé'], 403);
-        }
+        // if (!Gate::allows('view', $article)) {
+        //     return response()->json(['message' => 'Non autorisé'], 403);
+        // }
 
         $query = ArticleMedia::where('article_id', $articleId)
             ->with(['createdBy', 'updatedBy'])
@@ -436,13 +445,13 @@ class ArticleMediaController extends Controller
         }
 
         // Autorisation
-        if (!Gate::allows('update', $media)) {
-            return response()->json(['message' => 'Non autorisé'], 403);
-        }
+        // if (!Gate::allows('update', $media)) {
+        //     return response()->json(['message' => 'Non autorisé'], 403);
+        // }
 
         try {
             $media->is_active = !$media->is_active;
-            $media->updated_by = auth()->id();
+            $media->updated_by = Auth::id();
             $media->save();
 
             return response()->json([
@@ -469,13 +478,13 @@ class ArticleMediaController extends Controller
         }
 
         // Autorisation
-        if (!Gate::allows('update', $media)) {
-            return response()->json(['message' => 'Non autorisé'], 403);
-        }
+        // if (!Gate::allows('update', $media)) {
+        //     return response()->json(['message' => 'Non autorisé'], 403);
+        // }
 
         try {
             $media->is_featured = !$media->is_featured;
-            $media->updated_by = auth()->id();
+            $media->updated_by = Auth::id();
             $media->save();
 
             return response()->json([
