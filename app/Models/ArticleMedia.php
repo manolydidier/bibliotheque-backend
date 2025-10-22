@@ -51,6 +51,7 @@ class ArticleMedia extends Model
         'sort_order' => 'integer',
         'is_featured' => 'boolean',
         'is_active' => 'boolean',
+        'deleted_at'  => 'datetime',
         'type' => MediaType::class,
     ];
 
@@ -252,35 +253,128 @@ class ArticleMedia extends Model
         return null;
     }
 
+    /**
+     * Supprime les fichiers physiques
+     * 
+     * ⚠️ ATTENTION : Cette méthode ne doit être appelée que lors d'un forceDelete
+     * Elle est maintenant gérée par ArticleMediaController::forceDelete()
+     * 
+     * @deprecated Utilisez ArticleMediaController::forceDelete()
+     * @return bool
+     */
     public function deleteFile(): bool
     {
         try {
-            if (Storage::disk('public')->exists($this->path)) {
-                Storage::disk('public')->delete($this->path);
+            $disk = Storage::disk('public');
+            
+            // Normaliser le chemin
+            $path = $this->normalizePath($this->path);
+            $thumbPath = $this->normalizePath($this->thumbnail_path);
+            
+            // ⚠️ Ne supprimer que si les fichiers NE SONT PAS dans _trash
+            if ($path && !str_contains($path, '/_trash/') && $disk->exists($path)) {
+                $disk->delete($path);
+                logger()->info('ArticleMedia deleteFile(): fichier principal supprimé', [
+                    'id' => $this->id,
+                    'path' => $path
+                ]);
             }
             
-            if ($this->thumbnail_path && Storage::disk('public')->exists($this->thumbnail_path)) {
-                Storage::disk('public')->delete($this->thumbnail_path);
+            if ($thumbPath && !str_contains($thumbPath, '/_trash/') && $disk->exists($thumbPath)) {
+                $disk->delete($thumbPath);
+                logger()->info('ArticleMedia deleteFile(): miniature supprimée', [
+                    'id' => $this->id,
+                    'thumbnail_path' => $thumbPath
+                ]);
             }
             
             return true;
         } catch (\Exception $e) {
+            logger()->error('ArticleMedia deleteFile(): erreur', [
+                'id' => $this->id,
+                'error' => $e->getMessage()
+            ]);
             return false;
         }
+    }
+
+    /**
+     * Normalise un chemin pour le disk 'public'
+     * 
+     * @param string|null $path
+     * @return string|null
+     */
+    private function normalizePath(?string $path): ?string
+    {
+        if (!$path) return null;
+        
+        $s = trim($path);
+        
+        // Si c'est une URL complète, extraire la partie relative
+        if (preg_match('#https?://[^/]+/(.*)$#i', $s, $m)) {
+            $s = $m[1];
+        }
+        
+        // Enlever les slashs en début
+        $s = ltrim($s, '/');
+        
+        // Si commence par "storage/", l'enlever
+        if (str_starts_with($s, 'storage/')) {
+            $s = substr($s, strlen('storage/'));
+        }
+        
+        // Si commence par "public/", l'enlever
+        if (str_starts_with($s, 'public/')) {
+            $s = substr($s, strlen('public/'));
+        }
+        
+        return ltrim($s, '/');
+    }
+
+    /**
+     * Vérifie si le média est dans la corbeille
+     * 
+     * @return bool
+     */
+    public function isInTrash(): bool
+    {
+        return $this->trashed() && (
+            str_contains($this->path ?? '', '/_trash/') ||
+            str_contains($this->thumbnail_path ?? '', '/_trash/')
+        );
     }
 
     // Events
     protected static function booted(): void
     {
+        // ✅ CORRECTION : Ne supprimer les fichiers que lors d'un forceDelete
         static::deleting(function (ArticleMedia $media) {
-            $media->deleteFile();
+            // Vérifier si c'est un forceDelete (suppression définitive)
+            if ($media->isForceDeleting()) {
+                logger()->info('ArticleMedia booted deleting: forceDelete détecté', [
+                    'id' => $media->id,
+                    'path' => $media->path,
+                    'in_trash' => $media->isInTrash()
+                ]);
+                
+                // Ne rien faire ici, le contrôleur ArticleMediaController::forceDelete()
+                // gère la suppression des fichiers de manière plus contrôlée
+            } else {
+                // C'est un soft delete
+                logger()->info('ArticleMedia booted deleting: soft delete détecté, ne pas toucher aux fichiers', [
+                    'id' => $media->id,
+                    'path' => $media->path
+                ]);
+                
+                // ⚠️ NE RIEN FAIRE : Le contrôleur ArticleMediaController::destroy()
+                // déplace les fichiers dans _trash AVANT d'appeler delete()
+            }
         });
 
         static::creating(function ($model) {
             if (empty($model->uuid)) {
                 $model->uuid = (string) Str::uuid();
             }
-            
         });
     }
 }

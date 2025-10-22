@@ -6,14 +6,17 @@ use App\Http\Controllers\Controller;
 use App\Models\ArticleMedia;
 use App\Enums\MediaType;
 use App\Models\Article;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\Validator;
-use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
+use Intervention\Image\Drivers\Gd\Driver as GdDriver;
+use Intervention\Image\ImageManager;
+use Intervention\Image\Gd\Driver;
 
 class ArticleMediaController extends Controller
 {
@@ -26,7 +29,8 @@ class ArticleMediaController extends Controller
 
         // Filtres
         if ($request->filled('type')) {
-            if ($type = MediaType::tryFrom($request->type)) {
+            $val = strtolower((string) $request->type);
+            if ($type = MediaType::tryFrom($val)) {
                 $query->byType($type);
             }
         }
@@ -48,33 +52,27 @@ class ArticleMediaController extends Controller
                    ->orWhere('original_filename', 'like', "%$q%");
             });
         }
-// … dans index() et byArticle() AVANT $media = … :
-if ($request->filled('type')) {
-    $raw = $request->type;
-    $val = is_string($raw) ? strtolower($raw) : $raw; // ← accepte IMAGE/Video…
-    if ($type = \App\Enums\MediaType::tryFrom($val)) {
-        $query->byType($type);
-    }
-}
 
-// Corbeille
-if ($request->trashed === 'only') {
-    $query->onlyTrashed();
-} elseif ($request->trashed === 'with') {
-    $query->withTrashed();
-}
-
-        // Corbeille
-        if ($request->boolean('only_trashed')) {
-            $query->onlyTrashed();
-        } elseif ($request->boolean('with_trashed')) {
-            $query->withTrashed();
+        // Corbeille : supporte ?trashed=only|with  (sinon rétro-compat only_trashed/with_trashed)
+        if ($request->has('trashed')) {
+            $trashed = $request->get('trashed');
+            if ($trashed === 'only') {
+                $query->onlyTrashed();
+            } elseif ($trashed === 'with') {
+                $query->withTrashed();
+            }
+        } else {
+            if ($request->boolean('only_trashed')) {
+                $query->onlyTrashed();
+            } elseif ($request->boolean('with_trashed')) {
+                $query->withTrashed();
+            }
         }
 
         // Tri
         $sortField = $request->get('sort_by', 'sort_order');
         $sortDir   = $request->get('sort_dir', 'asc');
-        if (in_array($sortField, ['name', 'sort_order', 'created_at', 'size'])) {
+        if (in_array($sortField, ['name', 'sort_order', 'created_at', 'size'], true)) {
             $query->orderBy($sortField, $sortDir);
         } else {
             $query->ordered();
@@ -90,7 +88,6 @@ if ($request->trashed === 'only') {
        =======================*/
     public function store(Request $request): JsonResponse
     {
-        // Ici on crée un média à partir de métadonnées déjà stockées (pas d'upload).
         $validator = Validator::make($request->all(), [
             'article_id'        => 'required|exists:articles,id',
             'name'              => 'required|string|max:255',
@@ -181,51 +178,289 @@ if ($request->trashed === 'only') {
     }
 
     /* =======================
+       HELPER: Normalisation des chemins
+       =======================*/
+    private function toPublicDiskRelative(?string $p): ?string
+    {
+        if (!$p) return null;
+        $s = trim($p);
+
+        // URL complète -> extrait la partie après /storage/
+        if (preg_match('#https?://[^/]+/(.*)$#i', $s, $m)) {
+            $s = $m[1];
+        }
+
+        // enlève les slashs en tête
+        $s = ltrim($s, '/');
+
+        // si commence par "storage/", on l'enlève (car le DISK "public" pointe sur storage/app/public)
+        if (str_starts_with($s, 'storage/')) {
+            $s = substr($s, strlen('storage/'));
+        }
+
+        // si commence par "public/", on l'enlève aussi (rare mais possible)
+        if (str_starts_with($s, 'public/')) {
+            $s = substr($s, strlen('public/'));
+        }
+
+        return ltrim($s, '/');
+    }
+
+    /* =======================
        DELETE (soft delete)
        =======================*/
     public function destroy(string $id): JsonResponse
     {
         $media = ArticleMedia::find($id);
-        if (!$media) return response()->json(['message' => 'Média non trouvé'], 404);
+        if (!$media) {
+            return response()->json(['message' => 'Média non trouvé'], 404);
+        }
 
         try {
-            $media->delete();
-            return response()->json(['message' => 'Média supprimé avec succès']);
+            DB::transaction(function () use ($media) {
+                $disk = Storage::disk('public');
+
+                $trashBase = "articles/{$media->article_id}/media/_trash";
+                $disk->makeDirectory($trashBase);
+                $disk->makeDirectory($trashBase . '/_thumbs');
+
+                $meta = (array) ($media->meta ?? []);
+                $meta['original_path']            = $media->path ?? null;
+                $meta['original_thumbnail_path']  = $media->thumbnail_path ?? null;
+
+                // --- normalise les chemins AVANT exists/move ---
+                $relPath      = $this->toPublicDiskRelative($media->path);
+                $relThumbPath = $this->toPublicDiskRelative($media->thumbnail_path);
+
+                // -------- FICHIER PRINCIPAL --------
+                if ($relPath && $disk->exists($relPath)) {
+                    $newPath = $trashBase . '/' . basename($relPath);
+                    if ($disk->exists($newPath)) {
+                        $newPath = $trashBase . '/' . uniqid('', true) . '-' . basename($relPath);
+                    }
+                    $disk->move($relPath, $newPath);
+                    $media->path = $newPath;
+                    $media->url  = $disk->url($newPath);
+                    
+                    logger()->info('ArticleMedia destroy(): fichier principal déplacé vers corbeille', [
+                        'id' => $media->id,
+                        'from' => $relPath,
+                        'to' => $newPath
+                    ]);
+                } else {
+                    logger()->warning('ArticleMedia destroy(): fichier introuvable pour move', [
+                        'id' => $media->id,
+                        'path' => $media->path,
+                        'rel' => $relPath
+                    ]);
+                }
+
+                // -------- MINIATURE --------
+                if ($relThumbPath && $disk->exists($relThumbPath)) {
+                    $newThumbPath = $trashBase . '/_thumbs/' . basename($relThumbPath);
+                    if ($disk->exists($newThumbPath)) {
+                        $newThumbPath = $trashBase . '/_thumbs/' . uniqid('', true) . '-' . basename($relThumbPath);
+                    }
+                    $disk->move($relThumbPath, $newThumbPath);
+                    $media->thumbnail_path = $newThumbPath;
+                    $media->thumbnail_url  = $disk->url($newThumbPath);
+                    
+                    logger()->info('ArticleMedia destroy(): miniature déplacée vers corbeille', [
+                        'id' => $media->id,
+                        'from' => $relThumbPath,
+                        'to' => $newThumbPath
+                    ]);
+                } else {
+                    if ($relThumbPath) {
+                        logger()->warning('ArticleMedia destroy(): miniature introuvable pour move', [
+                            'id' => $media->id,
+                            'thumb' => $media->thumbnail_path,
+                            'rel' => $relThumbPath
+                        ]);
+                    }
+                }
+
+                $media->meta = $meta;
+
+                // Soft delete (remplit deleted_at) après avoir sauvé les nouveaux chemins
+                $media->save();
+                $media->delete();
+            });
+
+            return response()->json(['message' => 'Média déplacé en corbeille (soft-delete)']);
         } catch (\Throwable $e) {
-            return response()->json(['message' => 'Erreur lors de la suppression du média', 'error' => $e->getMessage()], 500);
+            logger()->error('ArticleMedia destroy(): erreur lors de la mise en corbeille', [
+                'id' => $id,
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+            
+            return response()->json([
+                'message' => 'Erreur lors de la mise en corbeille',
+                'error'   => $e->getMessage(),
+            ], 500);
         }
     }
 
     /* =======================
-       RESTORE / FORCE DELETE
+       RESTORE
        =======================*/
     public function restore(string $id): JsonResponse
     {
+        /** @var ArticleMedia|null $media */
         $media = ArticleMedia::onlyTrashed()->find($id);
-        if (!$media) return response()->json(['message' => 'Média supprimé non trouvé'], 404);
+        if (!$media) {
+            return response()->json(['message' => 'Média non trouvé en corbeille'], 404);
+        }
 
         try {
-            $media->restore();
+            DB::transaction(function () use ($media) {
+                $disk = Storage::disk('public');
+                $meta = (array) ($media->meta ?? []);
+
+                // Chemins d'origine mémorisés lors du destroy()
+                $origPath = $meta['original_path'] ?? null;
+                $origThumbPath = $meta['original_thumbnail_path'] ?? null;
+
+                // -------- RESTAURER LE FICHIER PRINCIPAL --------
+                if ($origPath && $media->path && $disk->exists($media->path)) {
+                    // S'assure que le dossier d'origine existe
+                    $disk->makeDirectory(dirname($origPath));
+                    
+                    // Collision éventuelle => suffixe
+                    $finalPath = $origPath;
+                    if ($disk->exists($finalPath)) {
+                        $finalPath = dirname($origPath) . '/' . uniqid('', true) . '-' . basename($origPath);
+                    }
+                    
+                    $disk->move($media->path, $finalPath);
+                    $media->path = $finalPath;
+                    $media->url  = $disk->url($finalPath);
+                    
+                    logger()->info('ArticleMedia restore(): fichier principal restauré', [
+                        'id' => $media->id,
+                        'from' => $media->path,
+                        'to' => $finalPath
+                    ]);
+                }
+
+                // -------- RESTAURER LA MINIATURE --------
+                if ($origThumbPath && $media->thumbnail_path && $disk->exists($media->thumbnail_path)) {
+                    $disk->makeDirectory(dirname($origThumbPath));
+                    
+                    $finalThumb = $origThumbPath;
+                    if ($disk->exists($finalThumb)) {
+                        $finalThumb = dirname($origThumbPath) . '/' . uniqid('', true) . '-' . basename($origThumbPath);
+                    }
+                    
+                    $disk->move($media->thumbnail_path, $finalThumb);
+                    $media->thumbnail_path = $finalThumb;
+                    $media->thumbnail_url  = $disk->url($finalThumb);
+                    
+                    logger()->info('ArticleMedia restore(): miniature restaurée', [
+                        'id' => $media->id,
+                        'from' => $media->thumbnail_path,
+                        'to' => $finalThumb
+                    ]);
+                }
+
+                // Nettoie les meta "original_*"
+                unset($meta['original_path']);
+                unset($meta['original_thumbnail_path']);
+                $media->meta = $meta;
+
+                $media->restore(); // enlève deleted_at
+                $media->save();
+            });
+
             return response()->json([
                 'message' => 'Média restauré avec succès',
                 'data' => $media->load(['article', 'createdBy', 'updatedBy'])
             ]);
         } catch (\Throwable $e) {
-            return response()->json(['message' => 'Erreur lors de la restauration du média', 'error' => $e->getMessage()], 500);
+            logger()->error('ArticleMedia restore(): erreur lors de la restauration', [
+                'id' => $id,
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+            
+            return response()->json([
+                'message' => 'Erreur lors de la restauration',
+                'error'   => $e->getMessage(),
+            ], 500);
         }
     }
 
+    /* =======================
+       FORCE DELETE (suppression définitive)
+       =======================*/
     public function forceDelete(string $id): JsonResponse
     {
         $media = ArticleMedia::onlyTrashed()->find($id);
-        if (!$media) return response()->json(['message' => 'Média supprimé non trouvé'], 404);
+        if (!$media) {
+            return response()->json(['message' => 'Média supprimé non trouvé'], 404);
+        }
 
         try {
-            $media->deleteFile();
-            $media->forceDelete();
+            DB::transaction(function () use ($media) {
+                $disk = Storage::disk('public');
+                
+                // Normaliser les chemins
+                $relPath = $this->toPublicDiskRelative($media->path);
+                $relThumbPath = $this->toPublicDiskRelative($media->thumbnail_path);
+                
+                // -------- SUPPRIMER LE FICHIER PRINCIPAL (même dans _trash) --------
+                if ($relPath && $disk->exists($relPath)) {
+                    $disk->delete($relPath);
+                    logger()->info('ArticleMedia forceDelete(): fichier principal supprimé définitivement', [
+                        'id' => $media->id,
+                        'path' => $relPath
+                    ]);
+                } else {
+                    logger()->warning('ArticleMedia forceDelete(): fichier principal introuvable', [
+                        'id' => $media->id,
+                        'path' => $media->path,
+                        'rel' => $relPath
+                    ]);
+                }
+                
+                // -------- SUPPRIMER LA MINIATURE (même dans _trash) --------
+                if ($relThumbPath && $disk->exists($relThumbPath)) {
+                    $disk->delete($relThumbPath);
+                    logger()->info('ArticleMedia forceDelete(): miniature supprimée définitivement', [
+                        'id' => $media->id,
+                        'thumbnail_path' => $relThumbPath
+                    ]);
+                } else {
+                    if ($relThumbPath) {
+                        logger()->warning('ArticleMedia forceDelete(): miniature introuvable', [
+                            'id' => $media->id,
+                            'thumbnail_path' => $media->thumbnail_path,
+                            'rel' => $relThumbPath
+                        ]);
+                    }
+                }
+                
+                // -------- SUPPRIMER L'ENREGISTREMENT EN BASE DE DONNÉES --------
+                $media->forceDelete();
+                
+                logger()->info('ArticleMedia forceDelete(): enregistrement supprimé de la base de données', [
+                    'id' => $media->id
+                ]);
+            });
+            
             return response()->json(['message' => 'Média définitivement supprimé avec succès']);
         } catch (\Throwable $e) {
-            return response()->json(['message' => 'Erreur lors de la suppression définitive du média', 'error' => $e->getMessage()], 500);
+            logger()->error('ArticleMedia forceDelete(): erreur lors de la suppression définitive', [
+                'id' => $id,
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+            
+            return response()->json([
+                'message' => 'Erreur lors de la suppression définitive du média',
+                'error' => $e->getMessage()
+            ], 500);
         }
     }
 
@@ -234,7 +469,6 @@ if ($request->trashed === 'only') {
        =======================*/
     public function upload(Request $request): JsonResponse
     {
-        // NB: PHP peut bloquer avant Laravel si la taille dépasse upload_max_filesize/post_max_size
         if (!$request->hasFile('file')) {
             return response()->json([
                 'message' => "Aucun fichier reçu. Vérifiez 'upload_max_filesize' (".ini_get('upload_max_filesize').") et 'post_max_size' (".ini_get('post_max_size').")"
@@ -242,7 +476,7 @@ if ($request->trashed === 'only') {
         }
 
         $validator = Validator::make($request->all(), [
-            'file'       => 'required|file|max:102400', // 100MB (en Ko)
+            'file'       => 'required|file|max:102400', // 100MB
             'article_id' => 'required|exists:articles,id',
             'name'       => 'required|string|max:255',
             'alt_text'   => 'nullable|array',
@@ -310,7 +544,10 @@ if ($request->trashed === 'only') {
 
         // Filtres
         if ($request->filled('type')) {
-            if ($type = MediaType::tryFrom($request->type)) $query->byType($type);
+            $val = strtolower((string) $request->type);
+            if ($type = MediaType::tryFrom($val)) {
+                $query->byType($type);
+            }
         }
         if ($request->filled('is_active')) {
             $query->where('is_active', filter_var($request->is_active, FILTER_VALIDATE_BOOLEAN));
@@ -325,17 +562,26 @@ if ($request->trashed === 'only') {
             });
         }
 
-        // Corbeille
-        if ($request->boolean('only_trashed')) {
-            $query->onlyTrashed();
-        } elseif ($request->boolean('with_trashed')) {
-            $query->withTrashed();
+        // Corbeille : même logique que index()
+        if ($request->has('trashed')) {
+            $trashed = $request->get('trashed');
+            if ($trashed === 'only') {
+                $query->onlyTrashed();
+            } elseif ($trashed === 'with') {
+                $query->withTrashed();
+            }
+        } else {
+            if ($request->boolean('only_trashed')) {
+                $query->onlyTrashed();
+            } elseif ($request->boolean('with_trashed')) {
+                $query->withTrashed();
+            }
         }
 
         // Tri
         $sortField = $request->get('sort_by', 'sort_order');
         $sortDir   = $request->get('sort_dir', 'asc');
-        if (in_array($sortField, ['name', 'sort_order', 'created_at', 'size'])) {
+        if (in_array($sortField, ['name', 'sort_order', 'created_at', 'size'], true)) {
             $query->orderBy($sortField, $sortDir);
         } else {
             $query->ordered();
@@ -384,55 +630,6 @@ if ($request->trashed === 'only') {
     }
 
     /* =======================
-       BULK ACTIONS
-       =======================*/
-    public function bulkDestroy(Request $request): JsonResponse
-    {
-        $data = Validator::validate($request->all(), [
-            'ids'   => 'required|array|min:1',
-            'ids.*' => 'integer|exists:article_media,id',
-        ]);
-
-        $items = ArticleMedia::whereIn('id', $data['ids'])->get();
-        $ok = 0; $errors = [];
-
-        foreach ($items as $m) {
-            try { $m->delete(); $ok++; }
-            catch (\Throwable $e) { $errors[$m->id] = $e->getMessage(); }
-        }
-
-        return response()->json(['deleted' => $ok, 'errors' => $errors]);
-    }
-
-    public function bulkToggleActive(Request $request): JsonResponse
-    {
-        $data = Validator::validate($request->all(), [
-            'ids'     => 'required|array|min:1',
-            'ids.*'   => 'integer|exists:article_media,id',
-            'desired' => 'required|boolean',
-        ]);
-
-        $affected = ArticleMedia::whereIn('id', $data['ids'])
-            ->update(['is_active' => $data['desired'], 'updated_by' => Auth::id()]);
-
-        return response()->json(['updated' => $affected]);
-    }
-
-    public function bulkToggleFeatured(Request $request): JsonResponse
-    {
-        $data = Validator::validate($request->all(), [
-            'ids'     => 'required|array|min:1',
-            'ids.*'   => 'integer|exists:article_media,id',
-            'desired' => 'required|boolean',
-        ]);
-
-        $affected = ArticleMedia::whereIn('id', $data['ids'])
-            ->update(['is_featured' => $data['desired'], 'updated_by' => Auth::id()]);
-
-        return response()->json(['updated' => $affected]);
-    }
-
-    /* =======================
        Helpers
        =======================*/
     private function getMediaTypeFromMime(string $mimeType): MediaType
@@ -445,33 +642,71 @@ if ($request->trashed === 'only') {
 
     private function processImage(ArticleMedia $media, $file): void
     {
+        // Ne fabrique une miniature que pour les images
+        if (!str_starts_with((string) $media->mime_type, 'image/')) {
+            $media->thumbnail_path = null;
+            $media->thumbnail_url  = null;
+            return;
+        }
+
         try {
-            // dimensions
-            if (function_exists('getimagesize')) {
-                [$w, $h] = getimagesize($file->getPathname());
-                $media->dimensions = ['width' => $w, 'height' => $h];
+            // 1) Résoudre un chemin lisible
+            $sourcePath = method_exists($file, 'getRealPath')
+                ? $file->getRealPath()
+                : (method_exists($file, 'getPathname') ? $file->getPathname() : (string) $file);
+
+            if (!$sourcePath || !is_readable($sourcePath)) {
+                throw new \RuntimeException('Chemin source illisible: '.$sourcePath);
             }
 
-            // miniature (best effort)
-            $thumbPath = 'thumbnails/'.pathinfo($media->path, PATHINFO_DIRNAME).'/'.pathinfo($media->path, PATHINFO_FILENAME).'-thumb.jpg';
-            $thumbPath = str_replace('articles/', '', $thumbPath); // évite double "articles/articles"
-            // Idéal: Intervention Image
-            // \Image::make($file->getPathname())->fit(600, 400)->encode('jpg', 80);
-            // Storage::disk('public')->put($thumbPath, (string) $img);
-            // Ici: on « réserve » l'URL, même si la génération est déléguée ailleurs
+            // 2) Lire l'image (Intervention v3)
+            $manager = new ImageManager(new GdDriver());
+            $image   = $manager->read($sourcePath);
+
+            // Dimensions d'origine (en DB)
+            $media->dimensions = [
+                'width'  => $image->width(),
+                'height' => $image->height(),
+            ];
+
+            // 3) Dossier des vignettes dans le disk 'public'
+            //    => storage/app/public/articles/{id}/media/_thumbs
+            $thumbDir  = 'articles/'.$media->article_id.'/media/_thumbs';
+            Storage::disk('public')->makeDirectory($thumbDir);
+
+            $baseName  = pathinfo((string) $media->filename, PATHINFO_FILENAME); // uuid sans ext
+            $thumbPath = $thumbDir.'/'.$baseName.'-thumb.jpg';
+
+            // 4) Miniature: largeur max 480
+            $thumb = (clone $image);
+            $maxW  = 480;
+            if ($thumb->width() > $maxW) {
+                $thumb = $thumb->scale(width: $maxW); // conserve le ratio
+            }
+
+            // 5) Sauvegarde JPG qualité 80 sur le disk 'public'
+            Storage::disk('public')->put($thumbPath, (string) $thumb->toJpeg(80));
+
+            // Optionnel: vérifier que le fichier existe bien
+            if (!Storage::disk('public')->exists($thumbPath)) {
+                throw new \RuntimeException('Échec d\'écriture de la miniature: '.$thumbPath);
+            }
+
+            // 6) Enregistrer en DB (privilégie *path*, le front reconstruit l'URL)
             $media->thumbnail_path = $thumbPath;
             $media->thumbnail_url  = Storage::disk('public')->url($thumbPath);
+
         } catch (\Throwable $e) {
             logger()->warning('processImage error: '.$e->getMessage());
+            $media->thumbnail_path = null;
+            $media->thumbnail_url  = null;
         }
     }
 
     private function processVideo(ArticleMedia $media, $file): void
     {
         try {
-            // Placeholder: idéalement via FFmpeg
             $media->meta = ['duration' => 0, 'bitrate' => 0];
-
             $thumbPath = 'thumbnails/'.pathinfo($media->path, PATHINFO_FILENAME).'.jpg';
             $media->thumbnail_path = $thumbPath;
             $media->thumbnail_url  = Storage::disk('public')->url($thumbPath);

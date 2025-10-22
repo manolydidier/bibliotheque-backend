@@ -25,6 +25,7 @@ use App\Http\Controllers\Api\UserActivityController;
 use Illuminate\Support\Facades\Log;
 use App\Http\Controllers\Api\ArticleAddController;
 use App\Http\Controllers\Api\ArticleMediaController;
+use App\Http\Controllers\FileProxyController;
 
 Route::get('/user', function (Request $request) {
     return $request->user();
@@ -286,6 +287,11 @@ Route::middleware(['auth:sanctum'])->group(function () {
     Route::post('article-media/bulk/toggle-active',     [ArticleMediaController::class, 'bulkToggleActive']);
     Route::post('article-media/bulk/toggle-featured',   [ArticleMediaController::class, 'bulkToggleFeatured']);
 });
+
+
+// ========================================
+Route::match(['GET','HEAD','OPTIONS'], '/file-proxy', [FileProxyController::class, 'handle'])
+    ->name('file-proxy');
 //     Route::get('/check-php-config', function () {
 //         return response()->json([
 //             'upload_max_filesize' => ini_get('upload_max_filesize'),
