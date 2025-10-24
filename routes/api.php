@@ -25,6 +25,8 @@ use App\Http\Controllers\Api\UserActivityController;
 use Illuminate\Support\Facades\Log;
 use App\Http\Controllers\Api\ArticleAddController;
 use App\Http\Controllers\Api\ArticleMediaController;
+use App\Http\Controllers\Api\ArticleQueryController;
+use App\Http\Controllers\Api\CsrfCookieController;
 use App\Http\Controllers\FileProxyController;
 
 Route::get('/user', function (Request $request) {
@@ -128,9 +130,11 @@ Route::get('/auth/google/callback', [AuthController::class, 'googleCallback'])
             Route::get('/', [ArticleController::class, 'index'])->name('index')->middleware('auth:sanctum');
             Route::get('/search', [ArticleController::class, 'search'])->name('search')->middleware('auth:sanctum');
             Route::get('/{slug}', [ArticleController::class, 'show'])->name('show')->middleware('auth:sanctum');
+            
               // Déverrouillage par POST JSON { password: "..." }
             Route::post('{idOrSlug}/unlock', [ArticleController::class, 'unlock'])->middleware('auth:sanctum');
         });
+             Route::get('/articlesbackoffice/{id}', [ArticleController::class, 'showbackoffice'])->middleware('auth:sanctum');
 
 // ========================================
 // COMMENTS - API ROUTES
@@ -170,7 +174,7 @@ Route::middleware('auth:sanctum')->group(function () {
 
     Route::post('/articlesstore', [ArticleAddController::class, 'store']);
     Route::post('/articles/with-files', [ArticleAddController::class, 'storeWithFiles']);
-
+Route::get('/articles-index', [ArticleQueryController::class, 'index']);
 });
 
 // ========================================
@@ -297,6 +301,38 @@ Route::middleware(['auth:sanctum'])->group(function () {
 // ========================================
 Route::match(['GET','HEAD','OPTIONS'], '/file-proxy', [FileProxyController::class, 'handle'])
     ->name('file-proxy');
+
+
+
+  Route::middleware(['auth:sanctum'])->group(function () { 
+// ===== Articles =====
+// Articles
+Route::get('/articles/count',       [UserActivityController::class, 'articlesCount']);
+Route::get('/stats/articles-count', [UserActivityController::class, 'articlesCount']);
+
+// Users
+Route::get('/users/count',          [UserActivityController::class, 'usersCount']);
+Route::get('/stats/users-count',    [UserActivityController::class, 'usersCount']);
+Route::get('/stats/users-new',      [UserActivityController::class, 'usersNew']);
+Route::get('/stats/active-users',   [UserActivityController::class, 'usersActive']);
+Route::get('/users/active',         [UserActivityController::class, 'usersActive']);
+
+// Moderation
+Route::get('/moderation/pending-count', [UserActivityController::class, 'pendingCount']);
+Route::get('/moderation/pending',       [UserActivityController::class, 'pendingList']);
+
+// Activities
+Route::get('/activities',                [UserActivityController::class, 'all']);
+Route::get('/users/{user}/activities',   [UserActivityController::class, 'index']);
+
+// Effective permissions
+Route::get('/me/effective-permissions',      [UserActivityController::class, 'me']);
+Route::get('/users/{user}/effective-permissions', [UserActivityController::class, 'show']);
+
+
+
+Route::middleware('web')->get('/sanctum/csrf-cookie', [UserActivityController::class, 'showcsrf']);
+});
 //     Route::get('/check-php-config', function () {
 //         return response()->json([
 //             'upload_max_filesize' => ini_get('upload_max_filesize'),

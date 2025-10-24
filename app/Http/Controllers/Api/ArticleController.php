@@ -573,7 +573,170 @@ class ArticleController extends Controller
             ],
         ]);
     }
+  public function showbackoffice(Request $request, string $idOrSlug): JsonResponse
+{
+    // (optionnel) log utilisateur si tu as déjà la méthode
+    if (method_exists($this, 'logCurrentUser')) {
+        $this->logCurrentUser($request);
+    }
 
+    $validated = $request->validate([
+        'include'        => 'nullable|string',
+        'fields'         => 'nullable|string',
+        'password'       => 'nullable|string|max:255',
+        'increment_view' => 'nullable|boolean',
+    ]);
+
+    // helpers
+    $csv = fn($v) => collect(is_array($v) ? $v : explode(',', (string) $v))
+        ->map(fn($x) => trim((string) $x))
+        ->filter()
+        ->values();
+
+    $articleTable = (new Article())->getTable();
+
+    $allowedColumns = [
+        'id','tenant_id','title','slug','excerpt','content',
+        'featured_image','featured_image_alt','meta','seo_data',
+        'status','visibility','password',
+        'published_at','scheduled_at','expires_at',
+        'reading_time','word_count','view_count','comment_count',
+        'rating_average','rating_count','is_featured','is_sticky',
+        'allow_comments','allow_sharing','allow_rating',
+        'author_name','author_bio','author_avatar','author_id',
+        'created_by','updated_by','reviewed_by','reviewed_at','review_notes',
+        'created_at','updated_at','deleted_at',
+    ];
+
+    // Sélection
+    $select = $allowedColumns;
+    if (!empty($validated['fields'])) {
+        $requested = $csv($validated['fields'])->all();
+        $sel = array_values(array_intersect($allowedColumns, $requested));
+        if ($sel) $select = $sel;
+    }
+    $select = array_values(array_diff($select, ['share_count'])); // sécurité withCount
+
+    // Champs requis pour politiques
+    $requiredForPolicies = ['id','status','published_at','expires_at','password','slug','view_count','visibility','author_id'];
+    $select = array_values(array_unique(array_merge($select, $requiredForPolicies)));
+
+    // Relations
+    $relationsAllowed = [
+        'categories','tags','media','comments','approvedComments','ratings','shares','history',
+        'author','createdBy','updatedBy','reviewedBy',
+    ];
+    $includes = $relationsAllowed;
+    if (!empty($validated['include'])) {
+        $asked = $csv($validated['include'])->all();
+        $inc   = array_values(array_intersect($relationsAllowed, $asked));
+        if ($inc) $includes = $inc;
+    }
+
+    //⚠️ Base query SANS AUCUN FILTRE de statut/expiration
+    $base = Article::query()
+        ->from($articleTable)
+        ->select($select)
+        ->with($includes)
+        ->withCount([
+            'shares as share_count' => fn($q) => $q,
+            'comments','approvedComments','ratings','history','media','tags','categories'
+        ])
+        ->withAvg('ratings','rating');
+
+    // id numérique ou slug
+    if (ctype_digit($idOrSlug)) {
+        $base->where(function ($q) use ($articleTable, $idOrSlug) {
+            $q->where($articleTable.'.id', (int) $idOrSlug)
+              ->orWhere($articleTable.'.slug', $idOrSlug);
+        });
+    } else {
+        $base->where($articleTable.'.slug', $idOrSlug);
+    }
+
+    $article = $base->firstOrFail();
+
+    // ----- Contrôle d'accès (private/password) identique à avant -----
+    $providedPassword = $validated['password'] ?? $request->header('X-Article-Password');
+
+    $vis = $article->visibility instanceof \BackedEnum
+        ? $article->visibility->value
+        : (string) $article->visibility;
+
+    $isPrivate = ($vis === ArticleVisibility::PRIVATE->value);
+    $isPwd     = ($vis === ArticleVisibility::PASSWORD_PROTECTED->value);
+
+    if ($isPrivate && !$this->userHasPermissionToViewPrivateArticle($request, $article)) {
+        return response()->json([
+            'message'    => 'This article is private.',
+            'code'       => 'private',
+            'visibility' => ArticleVisibility::PRIVATE->value,
+        ], 403);
+    }
+
+    if ($isPwd) {
+        if ($providedPassword === null || $providedPassword === '') {
+            return response()->json([
+                'message'    => 'Password required or incorrect.',
+                'code'       => 'password_required',
+                'visibility' => ArticleVisibility::PASSWORD_PROTECTED->value,
+            ], 403);
+        }
+
+        $stored = (string) $article->password;
+        $looksHashed = str_starts_with($stored, '$2y$')
+                    || str_starts_with($stored, '$argon2i$')
+                    || str_starts_with($stored, '$argon2id$');
+
+        $ok = $looksHashed
+            ? \Illuminate\Support\Facades\Hash::check($providedPassword, $stored)
+            : hash_equals($stored, $providedPassword);
+
+        if (!$ok) {
+            return response()->json([
+                'message'    => 'Password required or incorrect.',
+                'code'       => 'password_incorrect',
+                'visibility' => ArticleVisibility::PASSWORD_PROTECTED->value,
+            ], 403);
+        }
+    }
+
+    // Incrément vue (optionnel)
+    $viewIncremented = false;
+    if ($request->boolean('increment_view')) {
+        $dedupeKey = sha1(($request->ip() ?? '0.0.0.0').'|'.($request->userAgent() ?? 'ua'));
+        $viewIncremented = app(\App\Services\ArticleCountersService::class)
+            ->incrementView($article, 1, $dedupeKey, 300);
+        if ($viewIncremented) {
+            $article->view_count = (int) ($article->view_count ?? 0) + 1;
+        }
+    }
+
+    // Normalisation métriques
+    if ($article->getAttribute('comment_count') === null) {
+        if ($article->getAttribute('approved_comments_count') !== null) {
+            $article->setAttribute('comment_count', (int) $article->getAttribute('approved_comments_count'));
+        } elseif ($article->getAttribute('comments_count') !== null) {
+            $article->setAttribute('comment_count', (int) $article->getAttribute('comments_count'));
+        }
+    }
+    if ($article->getAttribute('rating_average') === null && $article->getAttribute('ratings_avg_rating') !== null) {
+        $article->setAttribute('rating_average', (float) $article->getAttribute('ratings_avg_rating'));
+    }
+
+    $article->setAttribute('locked', false);
+    $article->setAttribute('reason', null);
+    $article->makeHidden(['password']);
+
+    return response()->json([
+        'data' => $article,
+        'meta' => [
+            'relations_included' => implode(',', $includes),
+            'view_incremented'   => $viewIncremented,
+            'note'               => 'Unfiltered: returns any status/expiration.',
+        ],
+    ]);
+}
     /* =========================================================
      * UNLOCK (POST /articles/{idOrSlug}/unlock)
      * ========================================================= */
