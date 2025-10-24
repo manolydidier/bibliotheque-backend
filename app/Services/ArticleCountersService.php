@@ -77,4 +77,6 @@ class ArticleCountersService
         Cache::forget("article_{$article->id}");
         Cache::forget("article_{$article->slug}");
     }
+
+    
 }

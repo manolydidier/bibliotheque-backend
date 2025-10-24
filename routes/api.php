@@ -177,9 +177,14 @@ Route::middleware('auth:sanctum')->group(function () {
 
 // // Categories
 Route::prefix('categories')->name('categories.')->group(function () {
-    Route::get('/categorieAdvance',[categoryController::class, 'index2']);
+    // Endpoints publics
+    Route::get('/categorieAdvance', [CategoryController::class, 'index2']);
+    // alias tolérant (tout en minuscules et au pluriel)
+    Route::get('/categoriesadvance', [CategoryController::class, 'index2']);
+
     Route::get('/', [CategoryController::class, 'index'])->name('index');
     Route::get('/{category}', [CategoryController::class, 'show'])->name('show');
+
     Route::middleware('auth:sanctum')->group(function () {
         Route::post('/', [CategoryController::class, 'store'])->name('store');
         Route::put('/{category}', [CategoryController::class, 'update'])->name('update');
