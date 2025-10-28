@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Models\Article;
+use Carbon\Carbon;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 
@@ -50,24 +51,44 @@ class ArticleCountersService
      * --------- Views (avec anti-double comptage optionnel) ---------
      * @return bool true si incrémenté, false si dédupliqué
      */
-    public function incrementView(Article $article, int $by = 1, ?string $dedupeKey = null, int $ttlSeconds = 300): bool
+     public function incrementView(Article $article, int $delta = 1, ?string $dedupeKey = null, int $ttlSeconds = 300): bool
     {
-        if ($by === 0) return false;
-
         if ($dedupeKey) {
-            $cacheKey = "viewdedupe:{$article->getKey()}:{$dedupeKey}";
-            if (!Cache::add($cacheKey, 1, now()->addSeconds($ttlSeconds))) {
-                return false; // déjà compté récemment
+            $cacheKey = 'viewed:article:' . $article->id . ':' . sha1($dedupeKey);
+            if (!Cache::add($cacheKey, 1, $ttlSeconds)) {
+                return false;
             }
         }
 
-        DB::table($article->getTable())
-            ->where($article->getKeyName(), $article->getKey()) // ✅ fix
-            ->update([
-                'view_count' => DB::raw('GREATEST(view_count + '.(int)$by.', 0)')
-            ]);
+        $today = Carbon::today()->toDateString();
+        $tenantId = property_exists($article, 'tenant_id')
+            ? ($article->tenant_id ?: 0)
+            : (method_exists($article, 'getAttribute') ? ($article->getAttribute('tenant_id') ?: 0) : 0);
 
-        $this->bustArticleCache($article);
+        DB::transaction(function () use ($article, $tenantId, $today, $delta) {
+            $q = DB::table('article_views')
+                ->where('article_id', $article->id)
+                ->where('tenant_id', $tenantId)
+                ->where('date', $today);
+
+            $updated = $q->increment('count', $delta);
+
+            if ($updated === 0) {
+                try {
+                    DB::table('article_views')->insert([
+                        'article_id' => $article->id,
+                        'tenant_id'  => $tenantId,
+                        'date'       => $today,
+                        'count'      => $delta,
+                        'created_at' => now(),
+                        'updated_at' => now(),
+                    ]);
+                } catch (\Throwable $e) {
+                    $q->increment('count', $delta);
+                }
+            }
+        });
+
         return true;
     }
 

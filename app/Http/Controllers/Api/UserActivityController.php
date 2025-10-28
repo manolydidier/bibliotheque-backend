@@ -78,8 +78,6 @@ class UserActivityController extends Controller
     /** GET /api/moderation/pending-count */
     public function pendingCount(Request $request): JsonResponse
     {
-        // si besoin : restreindre aux modérateurs
-        // $user = $request->user(); abort_unless($user, 401);
         $q = Comment::query()->where('status', 'pending');
 
         if ($request->filled('from')) {
@@ -95,7 +93,6 @@ class UserActivityController extends Controller
     /** GET /api/moderation/pending?per_page=20 */
     public function pendingList(Request $request): JsonResponse
     {
-        // $user = $request->user(); abort_unless($user, 401);
         $perPage = min(max((int)$request->get('per_page', 10), 1), 100);
         $page    = max((int)$request->get('page', 1), 1);
 
@@ -150,7 +147,6 @@ class UserActivityController extends Controller
         $actorId   = $request->integer('actor_id'); // qui a fait ?
         $targetId  = $request->integer('target_id'); // cible (rôles)
         $userAny   = $request->integer('user'); // impliqué (acteur OU cible)
-        $asTarget  = $request->boolean('as_target', false);
 
         $items = collect();
 
@@ -335,7 +331,7 @@ class UserActivityController extends Controller
     }
 
     /* =========================================================================
-     |  EFFECTIVE PERMISSIONS (déjà présents dans ton code)
+     |  EFFECTIVE PERMISSIONS (inchangé)
      |=========================================================================*/
 
     /** GET /api/me/effective-permissions */
@@ -360,7 +356,7 @@ class UserActivityController extends Controller
     }
 
     /* =========================================================================
-     |  Helpers internes
+     |  Utilitaires
      |=========================================================================*/
 
     private function paginateActivities(
@@ -526,7 +522,7 @@ class UserActivityController extends Controller
         return in_array($v, ['1', 'true', 'vrai', 'yes', 'oui'], true);
     }
 
-    /* ===== Effective permissions (inchangé, repris de ton code) ===== */
+    /* ===== Effective permissions (inchangé) ===== */
 
     private function buildResponseForUserId(int $userId): JsonResponse
     {
@@ -602,12 +598,12 @@ class UserActivityController extends Controller
         return false;
     }
 
+    /** GET /api/csrf (optionnel) */
     public function showcsrf(Request $request)
     {
         // Laravel génère/renouvelle automatiquement le token de session
         $token = csrf_token();
 
-        // Cookie XSRF-TOKEN (lisible JS => httpOnly=false), samesite=Lax
         $cookie = cookie(
             name:    'XSRF-TOKEN',
             value:   $token,
@@ -615,12 +611,449 @@ class UserActivityController extends Controller
             path:    '/',
             domain:  config('session.domain'),
             secure:  (bool) config('session.secure', false),
-            httpOnly:false,    // IMPORTANT : lisible par le navigateur
+            httpOnly:false,
             raw:     false,
             sameSite:'Lax'
         );
 
-        // Réponse 204 No Content + cookie
         return response()->noContent()->withCookie($cookie);
     }
+
+    /**
+     * GET /api/stats/time-series
+     * Params: metric=comments|views|shares, days, article_id, tenant_id, status (comments)
+     */
+    public function timeSeries(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'metric'     => 'required|string|in:comments,views,shares',
+            'days'       => 'nullable|integer|min:1|max:365',
+            'article_id' => 'nullable|integer',
+            'tenant_id'  => 'nullable|integer',
+            'status'     => 'nullable|string|in:pending,approved,rejected,spam', // pour comments
+        ]);
+
+        $metric = $validated['metric'];
+        $days   = (int)($validated['days'] ?? 30);
+        $to     = Carbon::today();
+        $from   = (clone $to)->subDays($days - 1);
+
+        // Helper séries => DB -> {day => count} -> fill zeroes
+        $fill = function(array $kv) use ($from, $to): array {
+            $map = [];
+            $cursor = (clone $from);
+            while ($cursor->lte($to)) {
+                $map[$cursor->toDateString()] = 0;
+                $cursor->addDay();
+            }
+            foreach ($kv as $row) {
+                $map[$row->day] = (int) $row->count;
+            }
+            return collect($map)->map(fn($v, $k) => ['day' => $k, 'count' => $v])->values()->all();
+        };
+
+        // ------- COMMENTS -------
+        if ($metric === 'comments') {
+            $q = DB::table('comments')
+                ->selectRaw('DATE(created_at) as day, COUNT(*) as count')
+                ->whereBetween('created_at', [$from->toDateString().' 00:00:00', $to->toDateString().' 23:59:59']);
+
+            $status = $validated['status'] ?? 'approved';
+            $q->where('status', $status);
+
+            if (!empty($validated['article_id']) && Schema::hasColumn('comments', 'article_id')) {
+                $q->where('article_id', (int)$validated['article_id']);
+            }
+            if (!empty($validated['tenant_id']) && Schema::hasColumn('comments', 'tenant_id'))  {
+                $q->where('tenant_id', (int)$validated['tenant_id']);
+            }
+
+            $rows = $q->groupBy('day')->orderBy('day')->get();
+            return response()->json(['series' => $fill($rows->all())]);
+        }
+
+        // ------- VIEWS -------
+        if ($metric === 'views') {
+            if (Schema::hasTable('article_views')) {
+                $hasDate  = Schema::hasColumn('article_views', 'date');
+                $hasCount = Schema::hasColumn('article_views', 'count');
+
+                if ($hasDate && $hasCount) {
+                    $q = DB::table('article_views')
+                        ->selectRaw('`date` as day, SUM(`count`) as count')
+                        ->whereBetween('date', [$from->toDateString(), $to->toDateString()]);
+                    if (!empty($validated['article_id']) && Schema::hasColumn('article_views', 'article_id')) $q->where('article_id', (int)$validated['article_id']);
+                    if (!empty($validated['tenant_id'])  && Schema::hasColumn('article_views', 'tenant_id'))  $q->where('tenant_id', (int)$validated['tenant_id']);
+                    $rows = $q->groupBy('day')->orderBy('day')->get();
+                    return response()->json(['series' => $fill($rows->all())]);
+                }
+
+                // fallback événementiel sur la même table
+                $q = DB::table('article_views')
+                    ->selectRaw('DATE(created_at) as day, COUNT(*) as count')
+                    ->whereBetween('created_at', [$from->toDateTimeString(), $to->toDateTimeString()]);
+                if (!empty($validated['article_id']) && Schema::hasColumn('article_views', 'article_id')) $q->where('article_id', (int)$validated['article_id']);
+                if (!empty($validated['tenant_id'])  && Schema::hasColumn('article_views', 'tenant_id'))  $q->where('tenant_id', (int)$validated['tenant_id']);
+                $rows = $q->groupBy('day')->orderBy('day')->get();
+                return response()->json(['series' => $fill($rows->all())]);
+            }
+
+            if (Schema::hasTable('article_events')) {
+                $q = DB::table('article_events')
+                    ->selectRaw('DATE(created_at) as day, COUNT(*) as count')
+                    ->where('type', 'view')
+                    ->whereBetween('created_at', [$from->toDateString().' 00:00:00', $to->toDateString().' 23:59:59']);
+                if (!empty($validated['article_id']) && Schema::hasColumn('article_events', 'article_id')) $q->where('article_id', (int)$validated['article_id']);
+                if (!empty($validated['tenant_id'])  && Schema::hasColumn('article_events', 'tenant_id'))  $q->where('tenant_id', (int)$validated['tenant_id']);
+                $rows = $q->groupBy('day')->orderBy('day')->get();
+                return response()->json(['series' => $fill($rows->all())]);
+            }
+
+            return response()->json(['series' => $fill([])]);
+        }
+
+        // ------- SHARES -------
+        if ($metric === 'shares') {
+            if (Schema::hasTable('article_shares')) {
+                $hasDate  = Schema::hasColumn('article_shares', 'date');
+                $hasCount = Schema::hasColumn('article_shares', 'count');
+
+                if ($hasDate && $hasCount) {
+                    $q = DB::table('article_shares')
+                        ->selectRaw('`date` as day, SUM(`count`) as count')
+                        ->whereBetween('date', [$from->toDateString(), $to->toDateString()]);
+                    if (!empty($validated['article_id']) && Schema::hasColumn('article_shares', 'article_id')) $q->where('article_id', (int)$validated['article_id']);
+                    if (!empty($validated['tenant_id'])  && Schema::hasColumn('article_shares', 'tenant_id'))  $q->where('tenant_id', (int)$validated['tenant_id']);
+                    $rows = $q->groupBy('day')->orderBy('day')->get();
+                    return response()->json(['series' => $fill($rows->all())]);
+                }
+
+                // fallback événementiel sur la même table
+                $q = DB::table('article_shares')
+                    ->selectRaw('DATE(created_at) as day, COUNT(*) as count')
+                    ->whereBetween('created_at', [$from->toDateTimeString(), $to->toDateTimeString()]);
+                if (!empty($validated['article_id']) && Schema::hasColumn('article_shares', 'article_id')) $q->where('article_id', (int)$validated['article_id']);
+                if (!empty($validated['tenant_id'])  && Schema::hasColumn('article_shares', 'tenant_id'))  $q->where('tenant_id', (int)$validated['tenant_id']);
+                $rows = $q->groupBy('day')->orderBy('day')->get();
+                return response()->json(['series' => $fill($rows->all())]);
+            }
+
+            if (Schema::hasTable('article_events')) {
+                $q = DB::table('article_events')
+                    ->selectRaw('DATE(created_at) as day, COUNT(*) as count')
+                    ->where('type', 'share')
+                    ->whereBetween('created_at', [$from->toDateString().' 00:00:00', $to->toDateString().' 23:59:59']);
+                if (!empty($validated['article_id']) && Schema::hasColumn('article_events', 'article_id')) $q->where('article_id', (int)$validated['article_id']);
+                if (!empty($validated['tenant_id'])  && Schema::hasColumn('article_events', 'tenant_id'))  $q->where('tenant_id', (int)$validated['tenant_id']);
+                $rows = $q->groupBy('day')->orderBy('day')->get();
+                return response()->json(['series' => $fill($rows->all())]);
+            }
+
+            return response()->json(['series' => $fill([])]);
+        }
+
+        return response()->json(['series' => $fill([])]);
+    }
+
+    /**
+     * GET /api/stats/trending
+     * Ex: ?metric=comments&days=30&limit=6
+     * Retour: [{article_id, count}]
+     */
+    public function trending(Request $request): JsonResponse
+{
+    $validated = $request->validate([
+        'metric'     => 'required|string|in:comments,views,shares',
+        'days'       => 'nullable|integer|min:1|max:365',
+        'limit'      => 'nullable|integer|min:1|max:50',
+        'tenant_id'  => 'nullable|integer',
+        'status'     => 'nullable|string|in:pending,approved,rejected,spam', // pour comments
+    ]);
+
+    $metric = $validated['metric'];
+    $days   = (int)($validated['days'] ?? 30);
+    $limit  = (int)($validated['limit'] ?? 6);
+    $to     = Carbon::now();
+    $from   = (clone $to)->subDays($days);
+
+    // ------- COMMENTS -------
+    if ($metric === 'comments') {
+        $q = DB::table('comments as c')
+            ->join('articles as a', 'a.id', '=', 'c.article_id')
+            ->selectRaw('c.article_id, a.title, a.slug, COUNT(*) as count')
+            ->whereNotNull('c.article_id')
+            ->whereBetween('c.created_at', [$from, $to]);
+
+        $status = $validated['status'] ?? 'approved';
+        $q->where('c.status', $status);
+
+        if (!empty($validated['tenant_id']) && Schema::hasColumn('comments', 'tenant_id')) {
+            $q->where('c.tenant_id', (int)$validated['tenant_id']);
+        }
+
+        $rows = $q->groupBy('c.article_id', 'a.title', 'a.slug')
+                  ->orderByDesc('count')
+                  ->limit($limit)
+                  ->get();
+
+        return response()->json(['data' => $rows]);
+    }
+
+    // ------- VIEWS -------
+    if ($metric === 'views') {
+        // Table dédiée "article_views"
+        if (Schema::hasTable('article_views')) {
+            $hasDate  = Schema::hasColumn('article_views', 'date');
+            $hasCount = Schema::hasColumn('article_views', 'count');
+
+            // Cas "agrégé" (date/count)
+            if ($hasDate && $hasCount) {
+                $base = DB::table('article_views as v')
+                    ->join('articles as a', 'a.id', '=', 'v.article_id')
+                    ->whereBetween('v.date', [$from->toDateString(), $to->toDateString()])
+                    ->selectRaw('v.article_id, a.title, a.slug, SUM(v.count) as count');
+
+                if (!empty($validated['tenant_id']) && Schema::hasColumn('article_views', 'tenant_id')) {
+                    $base->where('v.tenant_id', (int)$validated['tenant_id']);
+                }
+
+                $rows = $base->groupBy('v.article_id', 'a.title', 'a.slug')
+                             ->orderByDesc('count')
+                             ->limit($limit)
+                             ->get();
+
+                return response()->json(['data' => $rows]);
+            }
+
+            // Cas "événementiel" fallback (created_at)
+            $rows = DB::table('article_views as v')
+                ->join('articles as a', 'a.id', '=', 'v.article_id')
+                ->whereBetween('v.created_at', [$from, $to])
+                ->when(!empty($validated['tenant_id']) && Schema::hasColumn('article_views', 'tenant_id'),
+                    fn($q) => $q->where('v.tenant_id', (int)$validated['tenant_id']))
+                ->selectRaw('v.article_id, a.title, a.slug, COUNT(*) as count')
+                ->groupBy('v.article_id', 'a.title', 'a.slug')
+                ->orderByDesc('count')
+                ->limit($limit)
+                ->get();
+
+            return response()->json(['data' => $rows]);
+        }
+
+        // Fallback "article_events" (type = view)
+        if (Schema::hasTable('article_events')) {
+            $rows = DB::table('article_events as e')
+                ->join('articles as a', 'a.id', '=', 'e.article_id')
+                ->where('e.type', 'view')
+                ->whereBetween('e.created_at', [$from, $to])
+                ->when(!empty($validated['tenant_id']) && Schema::hasColumn('article_events', 'tenant_id'),
+                    fn($q) => $q->where('e.tenant_id', (int)$validated['tenant_id']))
+                ->selectRaw('e.article_id, a.title, a.slug, COUNT(*) as count')
+                ->groupBy('e.article_id', 'a.title', 'a.slug')
+                ->orderByDesc('count')
+                ->limit($limit)
+                ->get();
+
+            return response()->json(['data' => $rows]);
+        }
+
+        return response()->json(['data' => []]);
+    }
+
+    // ------- SHARES -------
+    if ($metric === 'shares') {
+        // Table dédiée "article_shares"
+        if (Schema::hasTable('article_shares')) {
+            $hasDate  = Schema::hasColumn('article_shares', 'date');
+            $hasCount = Schema::hasColumn('article_shares', 'count');
+
+            // Cas "agrégé" (date/count)
+            if ($hasDate && $hasCount) {
+                $base = DB::table('article_shares as s')
+                    ->join('articles as a', 'a.id', '=', 's.article_id')
+                    ->whereBetween('s.date', [$from->toDateString(), $to->toDateString()])
+                    ->selectRaw('s.article_id, a.title, a.slug, SUM(s.count) as count');
+
+                if (!empty($validated['tenant_id']) && Schema::hasColumn('article_shares', 'tenant_id')) {
+                    $base->where('s.tenant_id', (int)$validated['tenant_id']);
+                }
+
+                $rows = $base->groupBy('s.article_id', 'a.title', 'a.slug')
+                             ->orderByDesc('count')
+                             ->limit($limit)
+                             ->get();
+
+                return response()->json(['data' => $rows]);
+            }
+
+            // Cas "événementiel" fallback (created_at)
+            $rows = DB::table('article_shares as s')
+                ->join('articles as a', 'a.id', '=', 's.article_id')
+                ->whereBetween('s.created_at', [$from, $to])
+                ->when(!empty($validated['tenant_id']) && Schema::hasColumn('article_shares', 'tenant_id'),
+                    fn($q) => $q->where('s.tenant_id', (int)$validated['tenant_id']))
+                ->selectRaw('s.article_id, a.title, a.slug, COUNT(*) as count')
+                ->groupBy('s.article_id', 'a.title', 'a.slug')
+                ->orderByDesc('count')
+                ->limit($limit)
+                ->get();
+
+            return response()->json(['data' => $rows]);
+        }
+
+        // Fallback "article_events" (type = share)
+        if (Schema::hasTable('article_events')) {
+            $rows = DB::table('article_events as e')
+                ->join('articles as a', 'a.id', '=', 'e.article_id')
+                ->where('e.type', 'share')
+                ->whereBetween('e.created_at', [$from, $to])
+                ->when(!empty($validated['tenant_id']) && Schema::hasColumn('article_events', 'tenant_id'),
+                    fn($q) => $q->where('e.tenant_id', (int)$validated['tenant_id']))
+                ->selectRaw('e.article_id, a.title, a.slug, COUNT(*) as count')
+                ->groupBy('e.article_id', 'a.title', 'a.slug')
+                ->orderByDesc('count')
+                ->limit($limit)
+                ->get();
+
+            return response()->json(['data' => $rows]);
+        }
+
+        return response()->json(['data' => []]);
+    }
+
+    return response()->json(['data' => []]);
+}
+
+
+    /**
+ * GET /api/stats/downloads/time-series
+ * Statistiques de téléchargements des médias d'articles
+ */
+public function downloadsTimeSeries(Request $request): JsonResponse
+{
+    $validated = $request->validate([
+        'days'              => 'nullable|integer|min:1|max:365',
+        'include_protected' => 'nullable|boolean',
+        'article_id'        => 'nullable|integer',
+        'tenant_id'         => 'nullable|integer',
+    ]);
+
+    $days             = (int)($validated['days'] ?? 14);
+    $includeProtected = (bool)($validated['include_protected'] ?? false);
+    $to   = Carbon::today();
+    $from = (clone $to)->subDays($days - 1);
+
+    $fill = function(array $kv) use ($from, $to): array {
+        $map = [];
+        $cursor = (clone $from);
+        while ($cursor->lte($to)) {
+            $map[$cursor->toDateString()] = 0;
+            $cursor->addDay();
+        }
+        foreach ($kv as $row) {
+            $map[$row->day] = (int) $row->count;
+        }
+        return collect($map)->map(fn($v, $k) => ['day' => $k, 'count' => $v])->values()->all();
+    };
+
+    // tables candidates pour les téléchargements
+    $dlTables = ['article_media_downloads', 'textes_complets', 'media_downloads', 'file_downloads'];
+    $table = collect($dlTables)->first(fn($t) => Schema::hasTable($t));
+
+    // table media pour joindre les métadonnées (protected, article_id, tenant, etc.)
+    $mediaTables = ['article_media', 'media_files', 'files', 'media'];
+    $mediaTable = collect($mediaTables)->first(fn($t) => Schema::hasTable($t));
+
+    if ($table) {
+        $hasDate     = Schema::hasColumn($table, 'date');
+        $hasCountCol = Schema::hasColumn($table, 'count');
+        $hasCreated  = Schema::hasColumn($table, 'created_at');
+
+        // ===== 1) Agrégé jour (date/count) =====
+        if ($hasDate && $hasCountCol) {
+            $q = DB::table($table)
+                ->selectRaw('`date` as day, SUM(`count`) as count')
+                ->whereBetween('date', [$from->toDateString(), $to->toDateString()]);
+
+            // filtre article_id via jointure media (si possible)
+            if (!empty($validated['article_id']) && $mediaTable && Schema::hasColumn($mediaTable, 'article_id')) {
+                $q->join("$mediaTable as am", "am.id", "=", "$table.file_id")
+                  ->where('am.article_id', (int)$validated['article_id']);
+            }
+
+            if (!empty($validated['tenant_id']) && Schema::hasColumn($table, 'tenant_id')) {
+                $q->where("$table.tenant_id", (int)$validated['tenant_id']);
+            }
+
+            if (!$includeProtected && $mediaTable) {
+                $q->join("$mediaTable as mp", "mp.id", "=", "$table.file_id");
+                if (Schema::hasColumn($mediaTable, 'is_protected')) {
+                    $q->where('mp.is_protected', false);
+                } elseif (Schema::hasColumn($mediaTable, 'protected')) {
+                    $q->where('mp.protected', false);
+                } elseif (Schema::hasColumn($mediaTable, 'password') || Schema::hasColumn($mediaTable, 'password_hash')) {
+                    $q->whereNull('mp.password')->whereNull('mp.password_hash');
+                } elseif (Schema::hasColumn($mediaTable, 'visibility')) {
+                    $q->where('mp.visibility', '!=', 'password_protected');
+                }
+            }
+
+            $rows = $q->groupBy('day')->orderBy('day')->get();
+            return response()->json(['series' => $fill($rows->all())]);
+        }
+
+        // ===== 2) Événementiel (created_at) =====
+        if ($hasCreated) {
+            $q = DB::table($table)
+                ->selectRaw('DATE(created_at) as day, COUNT(*) as count')
+                ->whereBetween('created_at', [$from->toDateString().' 00:00:00', $to->toDateString().' 23:59:59']);
+
+            if (!empty($validated['article_id']) && $mediaTable && Schema::hasColumn($mediaTable, 'article_id')) {
+                $q->join("$mediaTable as am", "am.id", "=", "$table.file_id")
+                  ->where('am.article_id', (int)$validated['article_id']);
+            }
+
+            if (!empty($validated['tenant_id']) && Schema::hasColumn($table, 'tenant_id')) {
+                $q->where("$table.tenant_id", (int)$validated['tenant_id']);
+            }
+
+            if (!$includeProtected && $mediaTable) {
+                $q->join("$mediaTable as mp", "mp.id", "=", "$table.file_id");
+                if (Schema::hasColumn($mediaTable, 'is_protected')) {
+                    $q->where('mp.is_protected', false);
+                } elseif (Schema::hasColumn($mediaTable, 'protected')) {
+                    $q->where('mp.protected', false);
+                } elseif (Schema::hasColumn($mediaTable, 'password') || Schema::hasColumn($mediaTable, 'password_hash')) {
+                    $q->whereNull('mp.password')->whereNull('mp.password_hash');
+                } elseif (Schema::hasColumn($mediaTable, 'visibility')) {
+                    $q->where('mp.visibility', '!=', 'password_protected');
+                }
+            }
+
+            $rows = $q->groupBy('day')->orderBy('day')->get();
+            return response()->json(['series' => $fill($rows->all())]);
+        }
+    }
+
+    // ===== 3) Fallback: article_events (type=download) =====
+    if (Schema::hasTable('article_events')) {
+        $q = DB::table('article_events')
+            ->selectRaw('DATE(created_at) as day, COUNT(*) as count')
+            ->where('type', 'download')
+            ->whereBetween('created_at', [$from->toDateString().' 00:00:00', $to->toDateString().' 23:59:59']);
+
+        if (!empty($validated['article_id']) && Schema::hasColumn('article_events', 'article_id')) {
+            $q->where('article_id', (int)$validated['article_id']);
+        }
+        if (!empty($validated['tenant_id']) && Schema::hasColumn('article_events', 'tenant_id')) {
+            $q->where('tenant_id', (int)$validated['tenant_id']);
+        }
+
+        $rows = $q->groupBy('day')->orderBy('day')->get();
+        return response()->json(['series' => $fill($rows->all())]);
+    }
+
+    return response()->json(['series' => $fill([])]);
+}
+
 }

@@ -26,8 +26,11 @@ use Illuminate\Support\Facades\Log;
 use App\Http\Controllers\Api\ArticleAddController;
 use App\Http\Controllers\Api\ArticleMediaController;
 use App\Http\Controllers\Api\ArticleQueryController;
-use App\Http\Controllers\Api\CsrfCookieController;
+
+use App\Http\Controllers\Api\ArticleViewController;
+use App\Http\Controllers\Api\FileDownloadController;
 use App\Http\Controllers\FileProxyController;
+
 
 Route::get('/user', function (Request $request) {
     return $request->user();
@@ -260,13 +263,46 @@ Route::middleware('throttle:30,1')->group(function () {
 // MODULE ACTIVITY USER - API ROUTES
 // ===
 
-Route::middleware('auth:sanctum')->group(function () {
-    Route::get('/users/{user}/activities', [UserActivityController::class, 'index']);
-    Route::get('/me/effective-permissions', [UserActivityController::class, 'me']);
-     Route::get('/activities', [UserActivityController::class, 'all']);
+
+Route::middleware(['auth:sanctum'])->group(function () {
+    // Compteurs & users
+    Route::get('/stats/articles-count', [UserActivityController::class, 'articlesCount']);
+    Route::get('/stats/users-count',    [UserActivityController::class, 'usersCount']);
+    Route::get('/stats/users-new',      [UserActivityController::class, 'usersNew']);
+    Route::get('/stats/active-users',   [UserActivityController::class, 'usersActive']);
+
+    // Modération
     Route::get('/moderation/pending-count', [UserActivityController::class, 'pendingCount']);
     Route::get('/moderation/pending',       [UserActivityController::class, 'pendingList']);
+
+    // Séries et trending (consommés par le Dashboard)
+    Route::get('/stats/time-series',  [UserActivityController::class, 'timeSeries']);
+    Route::get('/stats/trending',     [UserActivityController::class, 'trending']);
+
+    // (optionnel) feed activités
+    Route::get('/activities',         [UserActivityController::class, 'all']);
+    Route::get('/users/{user}/activities', [UserActivityController::class, 'index']);
+
+    // (optionnel) perms effectives
+    Route::get('/me/effective-permissions',      [UserActivityController::class, 'me']);
+    Route::get('/users/{user}/effective-permissions', [UserActivityController::class, 'show']);
+
+    // (optionnel) csrf utilitaire
+    Route::get('/csrf', [UserActivityController::class, 'showcsrf']);
+    Route::get('/article-media/stats/time-series', [UserActivityController::class, 'downloadsTimeSeries']); // Alias
+     Route::get('/stats/downloads/time-series', [UserActivityController::class, 'downloadsTimeSeries']);
+
 });
+
+
+Route::post('/articles/{article}/view', [ArticleViewController::class, 'store'])
+    ->name('articles.view')
+    ->middleware('auth:sanctum'); 
+
+    
+Route::post('/media/{media}/download', [FileDownloadController::class, 'store'])
+    ->name('media.download')
+    ->middleware('auth:sanctum'); 
 /*
 |-----------------------------------------------------------------------
 | Article Media (CRUD + actions personnalisées)
@@ -295,6 +331,10 @@ Route::middleware(['auth:sanctum'])->group(function () {
     Route::post('article-media/bulk/destroy',           [ArticleMediaController::class, 'bulkDestroy']);
     Route::post('article-media/bulk/toggle-active',     [ArticleMediaController::class, 'bulkToggleActive']);
     Route::post('article-media/bulk/toggle-featured',   [ArticleMediaController::class, 'bulkToggleFeatured']);
+    // routes/web.php
+Route::get('/media/{id}/stream', [ArticleMediaController::class, 'stream']);
+Route::post('/media/{id}/download', [ArticleMediaController::class, 'increment']); // ton ping/beacon
+
 });
 
 
@@ -329,7 +369,8 @@ Route::get('/users/{user}/activities',   [UserActivityController::class, 'index'
 Route::get('/me/effective-permissions',      [UserActivityController::class, 'me']);
 Route::get('/users/{user}/effective-permissions', [UserActivityController::class, 'show']);
 
-
+Route::get('/stats/timeseries', [UserActivityController::class, 'timeSeries']);
+Route::get('/stats/trending',   [UserActivityController::class, 'trending']);
 
 Route::middleware('web')->get('/sanctum/csrf-cookie', [UserActivityController::class, 'showcsrf']);
 });

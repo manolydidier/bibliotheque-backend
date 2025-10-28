@@ -93,8 +93,9 @@ class CommentController extends Controller
         ->when($request->filled('article_id'), fn ($q) => $q->where('article_id', (int) $request->get('article_id')))
         ->when($request->filled('user_id'), fn ($q) => $q->where('user_id', (int) $request->get('user_id')))
         ->when($request->filled('featured'), fn ($q) => $q->where('is_featured', filter_var($request->get('featured'), FILTER_VALIDATE_BOOL)))
-        ->when($request->filled('parent_id'), fn ($q) => $q->where('parent_id', $request->get('parent_id')));
-
+        ->when($request->filled('parent_id'), fn ($q) => $q->where('parent_id', $request->get('parent_id')))
+        ->when($request->filled('created_from'), fn ($q) => $q->whereDate('created_at', '>=', $request->get('created_from')))
+    ->when($request->filled('created_to'),   fn ($q) => $q->whereDate('created_at', '<=', $request->get('created_to')));
     if ($request->get('parent_id') === 'null') {
         $query->whereNull('parent_id');
     }

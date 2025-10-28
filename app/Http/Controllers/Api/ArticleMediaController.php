@@ -12,6 +12,7 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
 use Intervention\Image\Drivers\Gd\Driver as GdDriver;
@@ -23,65 +24,104 @@ class ArticleMediaController extends Controller
     /* =======================
        LISTE GLOBALE (index)
        =======================*/
-    public function index(Request $request): JsonResponse
-    {
-        $query = ArticleMedia::with(['article', 'createdBy', 'updatedBy']);
+   public function index(Request $request): JsonResponse
+{
+    // Base Eloquent + colonnes sélectionnées (pour pouvoir ajouter un sous-select)
+    $baseTable = (new ArticleMedia)->getTable(); // ex: 'article_media'
 
-        // Filtres
-        if ($request->filled('type')) {
-            $val = strtolower((string) $request->type);
-            if ($type = MediaType::tryFrom($val)) {
-                $query->byType($type);
-            }
-        }
-        if ($request->filled('article_id')) {
-            $query->where('article_id', $request->article_id);
-        }
-        if ($request->filled('is_active')) {
-            $query->where('is_active', filter_var($request->is_active, FILTER_VALIDATE_BOOLEAN));
-        }
-        if ($request->filled('is_featured')) {
-            $query->where('is_featured', filter_var($request->is_featured, FILTER_VALIDATE_BOOLEAN));
-        }
-        if ($request->filled('tenant_id')) {
-            $query->byTenant($request->tenant_id);
-        }
-        if ($q = trim((string)$request->get('q'))) {
-            $query->where(function ($qq) use ($q) {
-                $qq->where('name', 'like', "%$q%")
-                   ->orWhere('original_filename', 'like', "%$q%");
-            });
-        }
+    $query = ArticleMedia::query()
+        ->with(['article', 'createdBy', 'updatedBy'])
+        ->select("$baseTable.*");
 
-        // Corbeille : supporte ?trashed=only|with  (sinon rétro-compat only_trashed/with_trashed)
-        if ($request->has('trashed')) {
-            $trashed = $request->get('trashed');
-            if ($trashed === 'only') {
-                $query->onlyTrashed();
-            } elseif ($trashed === 'with') {
-                $query->withTrashed();
-            }
+    // ===== Ajout du champ calculé download_count =====
+    // Cherche d'abord une table d'agrégats (date,count,file_id)
+    $dlTable = collect(['article_media_downloads','textes_complets','media_downloads','file_downloads'])
+        ->first(fn($t) => Schema::hasTable($t));
+
+    if ($dlTable && Schema::hasColumn($dlTable, 'file_id') && Schema::hasColumn($dlTable, 'count')) {
+        // Agrégé par file_id
+        $query->addSelect([
+            'download_count' => DB::table($dlTable)
+                ->selectRaw('COALESCE(SUM(`count`),0)')
+                ->whereColumn("$dlTable.file_id", "$baseTable.id")
+        ]);
+    } else {
+        // Fallback événementiel si vous avez une table d'events
+        $eventsTable = 'article_events';
+        if (
+            Schema::hasTable($eventsTable) &&
+            Schema::hasColumn($eventsTable, 'type') &&
+            Schema::hasColumn($eventsTable, 'file_id')
+        ) {
+            $query->addSelect([
+                'download_count' => DB::table($eventsTable)
+                    ->selectRaw('COUNT(*)')
+                    ->where('type', 'download')
+                    ->whereColumn("$eventsTable.file_id", "$baseTable.id")
+            ]);
         } else {
-            if ($request->boolean('only_trashed')) {
-                $query->onlyTrashed();
-            } elseif ($request->boolean('with_trashed')) {
-                $query->withTrashed();
-            }
+            $query->addSelect(DB::raw('0 as download_count'));
         }
-
-        // Tri
-        $sortField = $request->get('sort_by', 'sort_order');
-        $sortDir   = $request->get('sort_dir', 'asc');
-        if (in_array($sortField, ['name', 'sort_order', 'created_at', 'size'], true)) {
-            $query->orderBy($sortField, $sortDir);
-        } else {
-            $query->ordered();
-        }
-
-        // Pagination
-        $perPage = (int) $request->get('per_page', 20);
-        return response()->json($query->paginate($perPage));
     }
+
+    // ===== Filtres =====
+    if ($request->filled('type')) {
+        $val = strtolower((string) $request->type);
+        if ($type = MediaType::tryFrom($val)) {
+            $query->byType($type);
+        }
+    }
+    if ($request->filled('article_id')) {
+        $query->where("$baseTable.article_id", $request->article_id);
+    }
+    if ($request->filled('is_active')) {
+        $query->where("$baseTable.is_active", filter_var($request->is_active, FILTER_VALIDATE_BOOLEAN));
+    }
+    if ($request->filled('is_featured')) {
+        $query->where("$baseTable.is_featured", filter_var($request->is_featured, FILTER_VALIDATE_BOOLEAN));
+    }
+    if ($request->filled('tenant_id')) {
+        $query->byTenant($request->tenant_id);
+    }
+    if ($q = trim((string)$request->get('q'))) {
+        $query->where(function ($qq) use ($q, $baseTable) {
+            $qq->where("$baseTable.name", 'like', "%$q%")
+               ->orWhere("$baseTable.original_filename", 'like', "%$q%");
+        });
+    }
+
+    // ===== Corbeille =====
+    if ($request->has('trashed')) {
+        $trashed = $request->get('trashed');
+        if ($trashed === 'only') {
+            $query->onlyTrashed();
+        } elseif ($trashed === 'with') {
+            $query->withTrashed();
+        }
+    } else {
+        if ($request->boolean('only_trashed')) {
+            $query->onlyTrashed();
+        } elseif ($request->boolean('with_trashed')) {
+            $query->withTrashed();
+        }
+    }
+
+    // ===== Tri =====
+    $sortField = (string) $request->get('sort_by', 'sort_order');
+    $sortDir   = strtolower((string) $request->get('sort_dir', 'asc')) === 'desc' ? 'desc' : 'asc';
+
+    // Autorise aussi le tri par download_count
+    $sortable = ['download_count', 'name', 'sort_order', 'created_at', 'size'];
+    if (in_array($sortField, $sortable, true)) {
+        $query->orderBy($sortField, $sortDir);
+    } else {
+        $query->ordered(); // ton scope existant
+    }
+
+    // ===== Pagination =====
+    $perPage = (int) $request->get('per_page', 20);
+    return response()->json($query->paginate($perPage));
+}
 
     /* =======================
        CREATE (métadonnées)
@@ -714,4 +754,20 @@ class ArticleMediaController extends Controller
             logger()->warning('processVideo error: '.$e->getMessage());
         }
     }
+
+    public function stream($id, Request $request) {
+    $media = ArticleMedia::findOrFail($id);
+    $media->increment('download_count');
+
+    $disk = 'public'; // adapte si besoin
+    $path = $media->path; // ex: "articles/14/media/xxx.docx"
+    abort_unless(Storage::disk($disk)->exists($path), 404);
+
+    $full = Storage::disk($disk)->path($path);
+    return response()->download($full, $media->original_filename, [
+        // CORS (utile seulement si tu fais un fetch blob)
+        'Access-Control-Allow-Origin' => $request->headers->get('origin') ?? '*',
+        'Access-Control-Expose-Headers' => 'Content-Disposition',
+    ]);
+}
 }
