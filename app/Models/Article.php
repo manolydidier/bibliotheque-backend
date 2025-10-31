@@ -417,4 +417,36 @@ class Article extends Model
             Cache::forget("article_{$article->slug}");
         });
     }
+
+    // use App\Models\Reaction; en haut du fichier
+
+public function reactions()
+{
+    return $this->morphMany(\App\Models\Reaction::class, 'reactable');
+}
+
+/** Scopes / helpers pour compter par type */
+public function likes()
+{
+    return $this->reactions()->where('type', 'like');
+}
+
+public function favorites()
+{
+    return $this->reactions()->where('type', 'favorite');
+}
+
+/** boolean helpers */
+public function isLikedBy($user)
+{
+    if (!$user) return false;
+    return (bool) $this->reactions()->where('type', 'like')->where('user_id', $user->id)->exists();
+}
+
+public function isFavoritedBy($user)
+{
+    if (!$user) return false;
+    return (bool) $this->reactions()->where('type', 'favorite')->where('user_id', $user->id)->exists();
+}
+
 }

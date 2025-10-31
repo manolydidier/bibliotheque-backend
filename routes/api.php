@@ -29,6 +29,7 @@ use App\Http\Controllers\Api\ArticleQueryController;
 
 use App\Http\Controllers\Api\ArticleViewController;
 use App\Http\Controllers\Api\FileDownloadController;
+use App\Http\Controllers\Api\ReactionController;
 use App\Http\Controllers\FileProxyController;
 
 
@@ -46,8 +47,8 @@ Route::get('/check-db', function () {
 
 
 Route::post('/register', [AuthController::class, 'register']);
-Route::get('/user/{id}/roles-permissions', [UserRolePermissionController::class, 'show']);
-Route::get('/users-roles-permissions', [UserRolePermissionController::class, 'index']);
+Route::get('/user/{id}/roles-permissions', [UserRolePermissionController::class, 'show'])->middleware('auth:sanctum');
+Route::get('/users-roles-permissions', [UserRolePermissionController::class, 'index'])->middleware('auth:sanctum');
 Route::post('/users', [UserCreationController::class, 'store']);
 
 Route::post('/login', [AuthController::class, 'login']);
@@ -187,11 +188,8 @@ Route::prefix('categories')->name('categories.')->group(function () {
     // Endpoints publics
     Route::get('/categorieAdvance', [CategoryController::class, 'index2']);
     // alias tolérant (tout en minuscules et au pluriel)
-    Route::get('/categoriesadvance', [CategoryController::class, 'index2']);
-
     Route::get('/', [CategoryController::class, 'index'])->name('index');
     Route::get('/{category}', [CategoryController::class, 'show'])->name('show');
-
     Route::middleware('auth:sanctum')->group(function () {
         Route::post('/', [CategoryController::class, 'store'])->name('store');
         Route::put('/{category}', [CategoryController::class, 'update'])->name('update');
@@ -201,6 +199,9 @@ Route::prefix('categories')->name('categories.')->group(function () {
     });
 });
 
+ Route::get('cat/trashed', [CategoryController::class, 'trashed']);
+    Route::post('cat/{id}/restore', [CategoryController::class, 'restore']);
+    Route::delete('cat/{id}/force', [CategoryController::class, 'forceDelete']);
 // ========================================
 
 // // Tags
@@ -373,6 +374,12 @@ Route::get('/stats/timeseries', [UserActivityController::class, 'timeSeries']);
 Route::get('/stats/trending',   [UserActivityController::class, 'trending']);
 
 Route::middleware('web')->get('/sanctum/csrf-cookie', [UserActivityController::class, 'showcsrf']);
+});
+
+Route::middleware('auth:sanctum')->group(function () {
+    Route::post('/reactions/toggle', [ReactionController::class, 'toggle']);
+    Route::get('/reactions/counts', [ReactionController::class, 'counts']); // public if needed (but here auth)
+    Route::get('/reactions/me', [ReactionController::class, 'me']);
 });
 //     Route::get('/check-php-config', function () {
 //         return response()->json([
