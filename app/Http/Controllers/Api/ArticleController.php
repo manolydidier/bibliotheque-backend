@@ -13,6 +13,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Schema;
+use Illuminate\Support\Facades\Storage;
 
 class ArticleController extends Controller
 {
@@ -976,5 +977,78 @@ class ArticleController extends Controller
         }
 
         return false;
+    }
+     public function search(Request $request)
+    {
+        // ✅ Validation simple et sûre
+        $validated = $request->validate([
+            'q'         => ['nullable', 'string', 'max:200'],
+            'per_page'  => ['nullable', 'integer', 'min:1', 'max:50'],
+            'category'  => ['nullable', 'string', 'max:100'],
+            'date_from' => ['nullable', 'date'],
+            'date_to'   => ['nullable', 'date'],
+        ]);
+
+        $q         = trim((string)($validated['q'] ?? ''));
+        $perPage   = (int)($validated['per_page'] ?? 8);
+        $category  = (string)($validated['category'] ?? '');
+        $dateFrom  = $validated['date_from'] ?? null;
+        $dateTo    = $validated['date_to'] ?? null;
+
+        // ⚙️ Requête de base + relations utiles pour le front
+        $query = Article::query()
+            ->with(['categories:id,name'])     // relation many-to-many ou hasMany ?
+            ->when($q !== '', function ($s) use ($q) {
+                $s->where(function ($w) use ($q) {
+                    $w->where('title',   'like', "%{$q}%")
+                      ->orWhere('excerpt','like', "%{$q}%")
+                      ->orWhere('content','like', "%{$q}%");
+                });
+            })
+            ->when($category !== '', function ($s) use ($category) {
+                $s->whereHas('categories', function ($c) use ($category) {
+                    $c->where('name', $category);
+                });
+            })
+            ->when($dateFrom, fn ($s) => $s->whereDate('published_at', '>=', $dateFrom))
+            ->when($dateTo,   fn ($s) => $s->whereDate('published_at', '<=', $dateTo))
+            ->orderByDesc('published_at')
+            ->orderByDesc('created_at');
+
+        // 📄 Pagination
+        $paginator = $query->paginate($perPage);
+
+        // 🔄 Adapter le payload pour coller à ton parseur JS (title, excerpt, published_at, category.name, featured_image.url)
+        $mapped = $paginator->getCollection()->map(function (Article $a) {
+            // featured_image : si tu stockes un chemin (ex: "posts/1.jpg"), on renvoie Storage::url(...)
+            $featured = $a->featured_image ?? null;
+            $featuredUrl = $featured ? Storage::url($featured) : null;
+
+            return [
+                'id'           => $a->id,
+                'slug'         => $a->slug,
+                'title'        => $a->title ?? '(sans titre)',
+                'excerpt'      => $a->excerpt ?? '',
+                'published_at' => optional($a->published_at)->toISOString(), // ISO pour le front
+                'category'     => $a->categories->first()
+                    ? ['name' => $a->categories->first()->name]
+                    : null,
+                // Le front sait lire 'featured_image.url' ou un champ simple 'featured_image'
+                'featured_image' => $featuredUrl ? ['url' => $featuredUrl] : null,
+                // Optionnel : si tu as un système de média secondaire
+                'media' => [],
+            ];
+        });
+
+        // 🧾 Réponse JSON compatible avec ton parseur (il accepte array ou {data: [...]})
+        return response()->json([
+            'data' => $mapped->values(),
+            'meta' => [
+                'current_page' => $paginator->currentPage(),
+                'per_page'     => $paginator->perPage(),
+                'total'        => $paginator->total(),
+                'last_page'    => $paginator->lastPage(),
+            ],
+        ]);
     }
 }
