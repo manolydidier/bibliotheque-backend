@@ -35,10 +35,18 @@ class AuthController extends Controller
         $validator = Validator::make($request->all(), [
             'username'    => 'required|string|max:100|unique:users,username',
             'email'       => 'required|email|max:255|unique:users,email',
-            'password'    => 'required|string|min:8|confirmed',
+            'password'    => [
+                'required', 'string', 'confirmed',
+                'regex:/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^A-Za-z0-9]).{8,}$/'
+            ],
             'first_name'  => 'required|string|max:100',
             'last_name'   => 'required|string|max:100',
+        ], [
+            // messages personnalisés (FR/EN)
+            'password.regex' => __("Le mot de passe doit comporter au moins 8 caractères, avec une minuscule, une majuscule, un chiffre et un caractère spécial."),
+            'password.confirmed' => __("La confirmation du mot de passe ne correspond pas."),
         ]);
+
 
         if ($validator->fails()) {
             return response()->json([
@@ -128,6 +136,72 @@ class AuthController extends Controller
         ]);
     }
 
+
+     /**
+     * POST /api/password/validate
+     * Vérifie côté serveur si le mot de passe respecte la policy.
+     */
+    public function validatePassword(Request $request)
+    {
+        $lang = $request->input('lang', 'fr');
+        $password = (string) ($request->input('password') ?? '');
+
+        $errors = [];
+        if (strlen($password) < 8) $errors[] = 'min';
+        if (!preg_match('/\p{Ll}/u', $password) || !preg_match('/\p{Lu}/u', $password)) $errors[] = 'mixed';
+        if (!preg_match('/\p{Nd}/u', $password)) $errors[] = 'number';
+        if (!preg_match('/[^\p{L}\p{N}]/u', $password)) $errors[] = 'symbol';
+
+        $valid = empty($errors);
+
+        return response()->json([
+            'valid'   => $valid,
+            'errors'  => $errors,
+            'message' => $valid
+                ? ($lang === 'fr' ? 'Mot de passe conforme.' : 'Password is valid.')
+                : ($lang === 'fr' ? 'Mot de passe non conforme.' : 'Password is not valid.'),
+        ]);
+    }
+
+    public function loginChallenge(Request $request)
+    {
+        $request->validate([
+            'email'    => ['required', 'email'],
+            'password' => ['required', 'string'],
+        ]);
+
+        $lang = $request->input('lang', 'fr');
+        $email = $request->input('email');
+        $password = (string) $request->input('password');
+
+        $user = User::where('email', $email)->first();
+
+        if (!$user) {
+            return response()->json([
+                'ok'      => false,
+                'message' => $lang === 'fr' ? "Cet e-mail n'est pas reconnu." : 'This email is not recognized.',
+                'code'    => 'EMAIL_NOT_FOUND',
+                'errors'  => ['email' => [$lang === 'fr' ? "E-mail introuvable." : "Email not found."]],
+            ], 422);
+        }
+
+        if (!Hash::check($password, $user->password)) {
+            return response()->json([
+                'ok'      => false,
+                'message' => $lang === 'fr' ? 'Mot de passe incorrect.' : 'Incorrect password.',
+                'code'    => 'INVALID_PASSWORD',
+                'errors'  => ['password' => [$lang === 'fr' ? "Mot de passe incorrect." : "Incorrect password."]],
+            ], 422);
+        }
+
+        return response()->json([
+            'ok'      => true,
+            'message' => $lang === 'fr' ? 'Identifiants valides.' : 'Credentials valid.',
+        ]);
+    }
+
+    
+    
     /**
      * 🧑‍💻 Récupération de l'utilisateur connecté
      */

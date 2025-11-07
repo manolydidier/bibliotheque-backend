@@ -54,7 +54,11 @@ Route::post('/users', [UserCreationController::class, 'store']);
 Route::post('/login', [AuthController::class, 'login']);
 Route::get('/validate-unique', [AuthController::class, 'validateUnique']);
 
+// ✅ Vérification de la robustesse du mot de passe (policy serveur)
+Route::post('/password/validate', [AuthController::class, 'validatePassword']);
 
+// ✅ Challenge des identifiants AVANT OTP (évite d'envoyer un code si le couple email+password est faux)
+Route::post('/login/challenge', [AuthController::class, 'loginChallenge']); //
 
     Route::post('/logout', [AuthController::class, 'logout'])->middleware('auth:sanctum');
     Route::post('/user/{id}/avatar', [AuthController::class, 'updateAvatar'])->middleware('auth:sanctum');
