@@ -1,5 +1,7 @@
 <?php
 
+use App\Http\Controllers\Api\ActivityController;
+
 use App\Http\Controllers\Api\ArticleController;
 use App\Http\Controllers\Api\ArticleRatingController;
 use App\Http\Controllers\Api\ArticleTagController;
@@ -29,6 +31,7 @@ use App\Http\Controllers\Api\ArticleQueryController;
 
 use App\Http\Controllers\Api\ArticleViewController;
 use App\Http\Controllers\Api\FileDownloadController;
+use App\Http\Controllers\Api\ModerationController;
 use App\Http\Controllers\Api\ReactionController;
 use App\Http\Controllers\FileProxyController;
 
@@ -276,9 +279,8 @@ Route::middleware(['auth:sanctum'])->group(function () {
     Route::get('/stats/users-new',      [UserActivityController::class, 'usersNew']);
     Route::get('/stats/active-users',   [UserActivityController::class, 'usersActive']);
 
-    // Modération
-    Route::get('/moderation/pending-count', [UserActivityController::class, 'pendingCount']);
-    Route::get('/moderation/pending',       [UserActivityController::class, 'pendingList']);
+
+    // Route::get('/moderation/pending',       [UserActivityController::class, 'pendingList']);
 
     // Séries et trending (consommés par le Dashboard)
     Route::get('/stats/time-series',  [UserActivityController::class, 'timeSeries']);
@@ -286,7 +288,7 @@ Route::middleware(['auth:sanctum'])->group(function () {
 
     // (optionnel) feed activités
     Route::get('/activities',         [UserActivityController::class, 'all']);
-    Route::get('/users/{user}/activities', [UserActivityController::class, 'index']);
+    // Route::get('/users/{user}/activities', [UserActivityController::class, 'index']);
 
     // (optionnel) perms effectives
     Route::get('/me/effective-permissions',      [UserActivityController::class, 'me']);
@@ -363,12 +365,12 @@ Route::get('/stats/active-users',   [UserActivityController::class, 'usersActive
 Route::get('/users/active',         [UserActivityController::class, 'usersActive']);
 
 // Moderation
-Route::get('/moderation/pending-count', [UserActivityController::class, 'pendingCount']);
-Route::get('/moderation/pending',       [UserActivityController::class, 'pendingList']);
+// Route::get('/moderation/pending-count', [UserActivityController::class, 'pendingCount']);
+// Route::get('/moderation/pending',       [UserActivityController::class, 'pendingList']);
 
 // Activities
 Route::get('/activities',                [UserActivityController::class, 'all']);
-Route::get('/users/{user}/activities',   [UserActivityController::class, 'index']);
+// Route::get('/users/{user}/activities',   [UserActivityController::class, 'index']);
 
 // Effective permissions
 Route::get('/me/effective-permissions',      [UserActivityController::class, 'me']);
@@ -385,6 +387,29 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/reactions/counts', [ReactionController::class, 'counts']); // public if needed (but here auth)
     Route::get('/reactions/me', [ReactionController::class, 'me']);
 });
+
+
+Route::middleware('auth:sanctum')->group(function () {
+    // Notifications personnelles
+        Route::get('/users/{user}/activities', [\App\Http\Controllers\Api\MixedActivityController::class, 'index']);
+           Route::get('/users/{user}/activities/count',  [\App\Http\Controllers\Api\MixedActivityController::class, 'count']);
+    Route::get('/users/{user}/activities/stream', [\App\Http\Controllers\Api\MixedActivityController::class, 'stream']); // stub
+
+    
+    Route::get('/users/{user}/activitiesUser', [ActivityController::class, 'index']);
+    Route::get('/users/{user}/activities/countUser', [ActivityController::class, 'count']);
+
+    // Compteurs/modération (réservé modérateurs)
+    Route::get('/moderation/pending-count', [ModerationController::class, 'pendingCount']);
+    Route::get('/moderation/pending',       [ModerationController::class, 'pending']);
+});
+
+
+
+// routes/api.php
+// Route::get('/users/{user}/activities/stream', [ActivityStreamController::class, 'stream'])
+//     ->middleware('auth:sanctum');
+
 //     Route::get('/check-php-config', function () {
 //         return response()->json([
 //             'upload_max_filesize' => ini_get('upload_max_filesize'),

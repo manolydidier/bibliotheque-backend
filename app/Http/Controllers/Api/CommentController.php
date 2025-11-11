@@ -14,7 +14,7 @@ use Illuminate\Validation\Rule;
 class CommentController extends Controller
 {
     /** Détermine si l'utilisateur est modérateur (voir rôles/permissions) */
-    private function userIsModerator($user): bool
+    public  function userIsModerator($user): bool
     {
         if (!$user) return false;
 

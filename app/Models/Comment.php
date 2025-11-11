@@ -11,6 +11,8 @@ use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Casts\Attribute;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Str;
+use App\Models\Activity;
+use App\Events\CommentModerated;
 
 class Comment extends Model
 {
@@ -283,43 +285,85 @@ class Comment extends Model
     }
 
     public function approve(User $moderator, ?string $notes = null): void
-    {
-        $this->update([
-            'status' => 'approved',
-            'moderated_by' => $moderator->id,
-            'moderated_at' => now(),
-            'moderation_notes' => $notes,
-        ]);
+{
+    $this->update([
+        'status' => 'approved',
+        'moderated_by' => $moderator->id,
+        'moderated_at' => now(),
+        'moderation_notes' => $notes,
+    ]);
 
-        // Update article comment count
-        if ($this->relationLoaded('article') || $this->article()->exists()) {
-            if (method_exists($this->article, 'incrementCommentCount')) {
-                $this->article->incrementCommentCount();
-            } else {
-                $this->article->increment('comment_count');
-            }
+    // compteur article (déjà présent)
+    if ($this->relationLoaded('article') || $this->article()->exists()) {
+        if (method_exists($this->article, 'incrementCommentCount')) {
+            $this->article->incrementCommentCount();
+        } else {
+            $this->article->increment('comment_count');
         }
     }
 
-    public function reject(User $moderator, string $notes): void
-    {
-        $this->update([
-            'status' => 'rejected',
-            'moderated_by' => $moderator->id,
-            'moderated_at' => now(),
-            'moderation_notes' => $notes,
+    // ✅ AJOUT MINIMAL
+    $this->loadMissing('article');
+    if ($this->user_id) {
+        Activity::create([
+            'type'         => 'comment_approved',
+            'recipient_id' => $this->user_id,
+            'article_slug' => optional($this->article)->slug,
+            'comment_id'   => $this->id,
+            'title'        => 'Votre commentaire a été approuvé',
         ]);
+        event(new CommentModerated($this, 'approved'));
     }
+}
+
+
+    public function reject(User $moderator, string $notes): void
+{
+    $this->update([
+        'status' => 'rejected',
+        'moderated_by' => $moderator->id,
+        'moderated_at' => now(),
+        'moderation_notes' => $notes,
+    ]);
+
+    // ✅ AJOUT MINIMAL
+    $this->loadMissing('article');
+    if ($this->user_id) {
+        Activity::create([
+            'type'         => 'comment_rejected',
+            'recipient_id' => $this->user_id,
+            'article_slug' => optional($this->article)->slug,
+            'comment_id'   => $this->id,
+            'title'        => 'Votre commentaire a été rejeté',
+        ]);
+        event(new CommentModerated($this, 'rejected'));
+    }
+}
+
 
     public function markAsSpam(User $moderator, ?string $notes = null): void
-    {
-        $this->update([
-            'status' => 'spam',
-            'moderated_by' => $moderator->id,
-            'moderated_at' => now(),
-            'moderation_notes' => $notes,
+{
+    $this->update([
+        'status' => 'spam',
+        'moderated_by' => $moderator->id,
+        'moderated_at' => now(),
+        'moderation_notes' => $notes,
+    ]);
+
+    // ✅ AJOUT MINIMAL
+    $this->loadMissing('article');
+    if ($this->user_id) {
+        Activity::create([
+            'type'         => 'comment_deleted', // ou 'comment_spam' si tu préfères
+            'recipient_id' => $this->user_id,
+            'article_slug' => optional($this->article)->slug,
+            'comment_id'   => $this->id,
+            'title'        => 'Votre commentaire a été supprimé',
         ]);
+        event(new CommentModerated($this, 'deleted'));
     }
+}
+
 
     public function incrementLikeCount(): void
     {
