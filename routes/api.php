@@ -32,9 +32,12 @@ use App\Http\Controllers\Api\ArticleQueryController;
 use App\Http\Controllers\Api\ArticleViewController;
 use App\Http\Controllers\Api\FileDownloadController;
 use App\Http\Controllers\Api\ModerationController;
+use App\Http\Controllers\Api\NewsletterSubscriptionController;
 use App\Http\Controllers\Api\ReactionController;
+use App\Http\Controllers\Api\SearchSuggestionController;
 use App\Http\Controllers\FileProxyController;
 
+use App\Http\Controllers\PlatformUpdatesController;
 
 Route::get('/user', function (Request $request) {
     return $request->user();
@@ -141,12 +144,11 @@ Route::get('/auth/google/callback', [AuthController::class, 'googleCallback'])
             Route::get('/', [ArticleController::class, 'index'])->name('index')->middleware('auth:sanctum');
             Route::get('/search', [ArticleController::class, 'search'])->name('search')->middleware('auth:sanctum');
             Route::get('/{slug}', [ArticleController::class, 'show'])->name('show')->middleware('auth:sanctum');
-            
               // Déverrouillage par POST JSON { password: "..." }
             Route::post('{idOrSlug}/unlock', [ArticleController::class, 'unlock'])->middleware('auth:sanctum');
         });
              Route::get('/articlesbackoffice/{id}', [ArticleController::class, 'showbackoffice'])->middleware('auth:sanctum');
-
+Route::get('search/suggestions', [SearchSuggestionController::class, 'index']);     
 // ========================================
 // COMMENTS - API ROUTES
 Route::apiResource('comments', CommentController::class)->only(['index','store','update','destroy']);
@@ -404,211 +406,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/moderation/pending',       [ModerationController::class, 'pending']);
 });
 
+Route::post('/newsletter/subscribe', [NewsletterSubscriptionController::class, 'store']);
 
-
-// routes/api.php
-// Route::get('/users/{user}/activities/stream', [ActivityStreamController::class, 'stream'])
-//     ->middleware('auth:sanctum');
-
-//     Route::get('/check-php-config', function () {
-//         return response()->json([
-//             'upload_max_filesize' => ini_get('upload_max_filesize'),
-//             'post_max_size' => ini_get('post_max_size'),
-//             'memory_limit' => ini_get('memory_limit'),
-//             'max_execution_time' => ini_get('max_execution_time'),
-//             'max_input_time' => ini_get('max_input_time'),
-//         ]);
-//     });
-// // routes/api.php (ou web.php si tu préfères)
-// Route::get('/_debug/upload-limits', function () {
-//     return response()->json([
-//         'sapi' => php_sapi_name(),                         // doit être "cli-server"
-//         'php' => PHP_VERSION,
-//         'loaded_ini' => php_ini_loaded_file(),            // <- chemin exact du php.ini utilisé
-//         'upload_max_filesize' => ini_get('upload_max_filesize'),
-//         'post_max_size'       => ini_get('post_max_size'),
-//         'user_ini.filename'   => ini_get('user_ini.filename'),
-//         'user_ini.cache_ttl'  => ini_get('user_ini.cache_ttl'),
-//     ]);
-// });
-
-// ========================================
-// MODULE ARTICLES - API ROUTES
-// ========================================
-
-// use App\Http\Controllers\Api\ArticleController;
-// use App\Http\Controllers\Api\CategoryController;
-// use App\Http\Controllers\Api\TagController;
-// use App\Http\Controllers\Api\MediaController;
-// use App\Http\Controllers\Api\CommentController;
-// use App\Http\Controllers\Api\ShareController;
-// use App\Http\Controllers\Api\RatingController;
-// use App\Http\Controllers\Api\AnalyticsController;
-
-// // Articles - Public routes
-
-
-// // Articles - Protected routes
-// Route::middleware('auth:sanctum')->prefix('articles')->name('articles.')->group(function () {
-//     Route::post('/', [ArticleController::class, 'store'])->name('store');
-//     Route::put('/{article}', [ArticleController::class, 'update'])->name('update');
-//     Route::delete('/{article}', [ArticleController::class, 'destroy'])->name('destroy');
-//     Route::post('/{article}/publish', [ArticleController::class, 'publish'])->name('publish');
-//     Route::post('/{article}/unpublish', [ArticleController::class, 'unpublish'])->name('unpublish');
-//     Route::post('/{article}/duplicate', [ArticleController::class, 'duplicate'])->name('duplicate');
-//     Route::post('/{article}/toggle-featured', [ArticleController::class, 'toggleFeatured'])->name('toggle-featured');
-//     Route::get('/{article}/stats', [ArticleController::class, 'stats'])->name('stats');
-// });
-
-
-
-// // Media
-// Route::middleware('auth:sanctum')->prefix('media')->name('media.')->group(function () {
-//     Route::get('/', [MediaController::class, 'index'])->name('index');
-//     Route::post('/', [MediaController::class, 'store'])->name('store');
-//     Route::get('/{media}', [MediaController::class, 'show'])->name('show');
-//     Route::put('/{media}', [MediaController::class, 'update'])->name('update');
-//     Route::delete('/{media}', [MediaController::class, 'destroy'])->name('destroy');
-//     Route::post('/{media}/toggle-featured', [MediaController::class, 'toggleFeatured'])->name('toggle-featured');
-//     Route::post('/upload', [MediaController::class, 'upload'])->name('upload');
-//     Route::post('/bulk-upload', [MediaController::class, 'bulkUpload'])->name('bulk-upload');
-// });
-
-// // Comments
-// Route::prefix('comments')->name('comments.')->group(function () {
-//     Route::get('/', [CommentController::class, 'index'])->name('index');
-//     Route::get('/{comment}', [CommentController::class, 'show'])->name('show');
-//     Route::post('/', [CommentController::class, 'store'])->name('store');
-    
-//     Route::middleware('auth:sanctum')->group(function () {
-//         Route::put('/{comment}', [CommentController::class, 'update'])->name('update');
-//         Route::delete('/{comment}', [CommentController::class, 'destroy'])->name('destroy');
-//         Route::post('/{comment}/approve', [CommentController::class, 'approve'])->name('approve');
-//         Route::post('/{comment}/reject', [CommentController::class, 'reject'])->name('reject');
-//         Route::post('/{comment}/mark-spam', [CommentController::class, 'markAsSpam'])->name('mark-spam');
-//         Route::post('/{comment}/like', [CommentController::class, 'like'])->name('like');
-//         Route::post('/{comment}/dislike', [CommentController::class, 'dislike'])->name('dislike');
-//     });
-// });
-
-// // Article-specific comments
-// Route::prefix('articles/{article}/comments')->name('articles.comments.')->group(function () {
-//     Route::get('/', [CommentController::class, 'articleComments'])->name('index');
-//     Route::post('/', [CommentController::class, 'storeArticleComment'])->name('store');
-// });
-
-// // Ratings
-// Route::prefix('ratings')->name('ratings.')->group(function () {
-//     Route::get('/', [RatingController::class, 'index'])->name('index');
-//     Route::get('/{rating}', [RatingController::class, 'show'])->name('show');
-//     Route::post('/', [RatingController::class, 'store'])->name('store');
-    
-//     Route::middleware('auth:sanctum')->group(function () {
-//         Route::put('/{rating}', [RatingController::class, 'update'])->name('update');
-//         Route::delete('/{rating}', [RatingController::class, 'destroy'])->name('destroy');
-//         Route::post('/{rating}/approve', [RatingController::class, 'approve'])->name('approve');
-//         Route::post('/{rating}/reject', [RatingController::class, 'reject'])->name('reject');
-//         Route::post('/{rating}/mark-spam', [RatingController::class, 'markAsSpam'])->name('mark-spam');
-//         Route::post('/{rating}/helpful', [RatingController::class, 'markHelpful'])->name('helpful');
-//         Route::post('/{rating}/not-helpful', [RatingController::class, 'markNotHelpful'])->name('not-helpful');
-//     });
-// });
-
-// // Article-specific ratings
-// Route::prefix('articles/{article}/ratings')->name('articles.ratings.')->group(function () {
-//     Route::get('/', [RatingController::class, 'articleRatings'])->name('index');
-//     Route::post('/', [RatingController::class, 'storeArticleRating'])->name('store');
-// });
-
-// // Shares
-// Route::prefix('shares')->name('shares.')->group(function () {
-//     Route::get('/', [ShareController::class, 'index'])->name('index');
-//     Route::post('/', [ShareController::class, 'store'])->name('store');
-//     Route::get('/{share}', [ShareController::class, 'show'])->name('show');
-    
-//     Route::middleware('auth:sanctum')->group(function () {
-//         Route::delete('/{share}', [ShareController::class, 'destroy'])->name('destroy');
-//         Route::post('/{share}/mark-converted', [ShareController::class, 'markConverted'])->name('mark-converted');
-//     });
-// });
-
-// // Article-specific shares
-// Route::prefix('articles/{article}/shares')->name('articles.shares.')->group(function () {
-//     Route::get('/', [ShareController::class, 'articleShares'])->name('index');
-//     Route::post('/', [ShareController::class, 'storeArticleShare'])->name('store');
-// });
-
-// // Analytics
-// Route::middleware('auth:sanctum')->prefix('analytics')->name('analytics.')->group(function () {
-//     Route::get('/overview', [AnalyticsController::class, 'overview'])->name('overview');
-//     Route::get('/articles', [AnalyticsController::class, 'articles'])->name('articles');
-//     Route::get('/categories', [AnalyticsController::class, 'categories'])->name('categories');
-//     Route::get('/tags', [AnalyticsController::class, 'tags'])->name('tags');
-//     Route::get('/users', [AnalyticsController::class, 'users'])->name('users');
-//     Route::get('/traffic', [AnalyticsController::class, 'traffic'])->name('traffic');
-//     Route::get('/engagement', [AnalyticsController::class, 'engagement'])->name('engagement');
-//     Route::get('/export', [AnalyticsController::class, 'export'])->name('export');
-// });
-
-// // Article-specific analytics
-// Route::middleware('auth:sanctum')->prefix('articles/{article}/analytics')->name('articles.analytics.')->group(function () {
-//     Route::get('/', [AnalyticsController::class, 'articleAnalytics'])->name('index');
-//     Route::get('/views', [AnalyticsController::class, 'articleViews'])->name('views');
-//     Route::get('/engagement', [AnalyticsController::class, 'articleEngagement'])->name('engagement');
-//     Route::get('/shares', [AnalyticsController::class, 'articleShares'])->name('shares');
-//     Route::get('/comments', [AnalyticsController::class, 'articleComments'])->name('comments');
-//     Route::get('/ratings', [AnalyticsController::class, 'articleRatings'])->name('ratings');
-// });
-
-// // Bulk operations
-// Route::middleware('auth:sanctum')->prefix('bulk')->name('bulk.')->group(function () {
-//     Route::post('/articles/publish', [ArticleController::class, 'bulkPublish'])->name('articles.publish');
-//     Route::post('/articles/unpublish', [ArticleController::class, 'bulkUnpublish'])->name('articles.unpublish');
-//     Route::post('/articles/archive', [ArticleController::class, 'bulkArchive'])->name('articles.archive');
-//     Route::post('/articles/delete', [ArticleController::class, 'bulkDelete'])->name('articles.delete');
-//     Route::post('/articles/move-category', [ArticleController::class, 'bulkMoveCategory'])->name('articles.move-category');
-//     Route::post('/articles/add-tags', [ArticleController::class, 'bulkAddTags'])->name('articles.add-tags');
-//     Route::post('/articles/remove-tags', [ArticleController::class, 'bulkRemoveTags'])->name('articles.remove-tags');
-// });
-
-// // Import/Export
-// Route::middleware('auth:sanctum')->prefix('import-export')->name('import-export.')->group(function () {
-//     Route::post('/articles/import', [ArticleController::class, 'import'])->name('articles.import');
-//     Route::get('/articles/export', [ArticleController::class, 'export'])->name('articles.export');
-//     Route::get('/articles/template', [ArticleController::class, 'downloadTemplate'])->name('articles.template');
-// });
-
-// // Search and filters
-// Route::prefix('search')->name('search.')->group(function () {
-//     Route::get('/articles', [ArticleController::class, 'search'])->name('articles');
-//     Route::get('/suggestions', [ArticleController::class, 'searchSuggestions'])->name('suggestions');
-//     Route::get('/autocomplete', [ArticleController::class, 'autocomplete'])->name('autocomplete');
-// });
-
-// // Sitemap and SEO
-// Route::prefix('seo')->name('seo.')->group(function () {
-//     Route::get('/sitemap.xml', [ArticleController::class, 'sitemap'])->name('sitemap');
-//     Route::get('/robots.txt', [ArticleController::class, 'robots'])->name('robots');
-//     Route::get('/meta/{article:slug}', [ArticleController::class, 'metaTags'])->name('meta-tags');
-// });
-
-// // Preview and drafts
-// Route::middleware('auth:sanctum')->prefix('preview')->name('preview.')->group(function () {
-//     Route::get('/articles/{article}', [ArticleController::class, 'preview'])->name('articles.show');
-//     Route::post('/articles/{article}/generate-token', [ArticleController::class, 'generatePreviewToken'])->name('articles.generate-token');
-// });
-
-// // Webhooks and integrations
-// Route::prefix('webhooks')->name('webhooks.')->group(function () {
-//     Route::post('/articles/published', [ArticleController::class, 'webhookPublished'])->name('articles.published');
-//     Route::post('/articles/updated', [ArticleController::class, 'webhookUpdated'])->name('articles.updated');
-//     Route::post('/articles/deleted', [ArticleController::class, 'webhookDeleted'])->name('articles.deleted');
-// });
-
-// // Health checks
-// Route::prefix('health')->name('health.')->group(function () {
-//     Route::get('/articles', [ArticleController::class, 'health'])->name('articles');
-//     Route::get('/database', [ArticleController::class, 'databaseHealth'])->name('database');
-//     Route::get('/cache', [ArticleController::class, 'cacheHealth'])->name('cache');
-// });
-
+Route::get('/platform/status', [PlatformUpdatesController::class, 'status']);
+Route::get('/platform/updates', [PlatformUpdatesController::class, 'updates']);

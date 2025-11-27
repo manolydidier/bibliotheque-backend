@@ -244,6 +244,17 @@ class ArticleAddController extends Controller
 
             $article->load(['categories', 'tags', 'author', 'createdBy']);
 
+                // 🔔 Notifier les abonnés seulement si l’article est publié
+                if ($article->status === ArticleStatus::PUBLISHED) {
+                    app(\App\Http\Controllers\Api\NewsletterSubscriptionController::class)
+                        ->notifyNewArticle($article);
+                }
+
+                return response()->json([
+                    'message' => 'Article créé avec succès',
+                    'data'    => $article
+                ], 201);
+
             return response()->json([
                 'message' => 'Article créé avec succès',
                 'data'    => $article
@@ -331,6 +342,17 @@ class ArticleAddController extends Controller
 
             $article->load(['categories', 'tags', 'author', 'createdBy']);
 
+            // 🔔 Notifier les abonnés si l’article est publié
+            if ($article->status === ArticleStatus::PUBLISHED) {
+                app(\App\Http\Controllers\Api\NewsletterSubscriptionController::class)
+                    ->notifyNewArticle($article);
+            }
+
+            return response()->json([
+                'message' => 'Article créé avec succès',
+                'data'    => $article
+            ], 201);
+
             return response()->json([
                 'message' => 'Article créé avec succès',
                 'data'    => $article
@@ -349,116 +371,131 @@ class ArticleAddController extends Controller
        Update (JSON)
     ==========================================================*/
     public function update(Request $request, $id)
-    {
-        // Normaliser le payload avant validation
-        $data = $this->preparePayload($request->all());
+{
+    // Normaliser le payload avant validation
+    $data = $this->preparePayload($request->all());
 
-        $validator = Validator::make($data, [
-            'title' => 'sometimes|required|string|max:255',
-            'slug' => 'sometimes|nullable|string|max:255|unique:articles,slug,' . $id,
-            'excerpt' => 'nullable|string|max:500',
-            'content' => 'sometimes|required|string',
-            'featured_image' => 'nullable|string|max:255',
-            'featured_image_alt' => 'nullable|string|max:255',
-            'status' => ['sometimes', Rule::enum(ArticleStatus::class)],
-            'visibility' => ['sometimes', Rule::enum(ArticleVisibility::class)],
-            'password' => 'nullable|string|max:255|required_if:visibility,' . ArticleVisibility::PASSWORD_PROTECTED->value,
-            'published_at' => 'nullable|date',
-            'scheduled_at' => 'nullable|date',
-            'expires_at' => 'nullable|date',
-            'is_featured' => 'nullable|boolean',
-            'is_sticky' => 'nullable|boolean',
-            'allow_comments' => 'nullable|boolean',
-            'allow_sharing' => 'nullable|boolean',
-            'allow_rating' => 'nullable|boolean',
-            'author_name' => 'nullable|string|max:255',
-            'author_bio' => 'nullable|string',
-            'author_avatar' => 'nullable|string|max:255',
-            'author_id' => 'nullable|exists:users,id',
-            'categories' => 'nullable|array',
-            'categories.*' => 'exists:categories,id',
-            'tags' => 'nullable|array',
-            'tags.*' => 'exists:tags,id',
+    $validator = Validator::make($data, [
+        'title' => 'sometimes|required|string|max:255',
+        'slug' => 'sometimes|nullable|string|max:255|unique:articles,slug,' . $id,
+        'excerpt' => 'nullable|string|max:500',
+        'content' => 'sometimes|required|string',
+        'featured_image' => 'nullable|string|max:255',
+        'featured_image_alt' => 'nullable|string|max:255',
+        'status' => ['sometimes', Rule::enum(ArticleStatus::class)],
+        'visibility' => ['sometimes', Rule::enum(ArticleVisibility::class)],
+        'password' => 'nullable|string|max:255|required_if:visibility,' . ArticleVisibility::PASSWORD_PROTECTED->value,
+        'published_at' => 'nullable|date',
+        'scheduled_at' => 'nullable|date',
+        'expires_at' => 'nullable|date',
+        'is_featured' => 'nullable|boolean',
+        'is_sticky' => 'nullable|boolean',
+        'allow_comments' => 'nullable|boolean',
+        'allow_sharing' => 'nullable|boolean',
+        'allow_rating' => 'nullable|boolean',
+        'author_name' => 'nullable|string|max:255',
+        'author_bio' => 'nullable|string',
+        'author_avatar' => 'nullable|string|max:255',
+        'author_id' => 'nullable|exists:users,id',
+        'categories' => 'nullable|array',
+        'categories.*' => 'exists:categories,id',
+        'tags' => 'nullable|array',
+        'tags.*' => 'exists:tags,id',
 
-            'meta'     => 'nullable|array',
-            'seo_data' => 'nullable|array',
-            // SEO imbriqué
-            'seo_data.meta_title'       => 'nullable|string|max:255',
-            'seo_data.meta_description' => 'nullable|string|max:1000',
-            'seo_data.canonical_url'    => 'nullable|url|max:255',
-            'seo_data.robots'           => 'nullable|array',
-            'seo_data.robots.index'     => 'nullable|boolean',
-            'seo_data.robots.follow'    => 'nullable|boolean',
+        'meta'     => 'nullable|array',
+        'seo_data' => 'nullable|array',
+        // SEO imbriqué
+        'seo_data.meta_title'       => 'nullable|string|max:255',
+        'seo_data.meta_description' => 'nullable|string|max:1000',
+        'seo_data.canonical_url'    => 'nullable|url|max:255',
+        'seo_data.robots'           => 'nullable|array',
+        'seo_data.robots.index'     => 'nullable|boolean',
+        'seo_data.robots.follow'    => 'nullable|boolean',
+    ]);
+
+    if ($validator->fails()) {
+        return response()->json([
+            'message' => 'Validation failed',
+            'errors'  => $validator->errors()
+        ], 422);
+    }
+
+    try {
+        DB::beginTransaction();
+
+        $article = Article::find($id);
+        if (!$article) {
+            return response()->json(['message' => 'Article non trouvé'], 404);
+        }
+
+        // ✅ On garde l'ancien statut AVANT la mise à jour
+        $wasPublished = $article->status === ArticleStatus::PUBLISHED;
+
+        $articleData = array_intersect_key($data, array_flip([
+            'title','slug','excerpt','content',
+            'featured_image','featured_image_alt',
+            'status','visibility','password',
+            'published_at','scheduled_at','expires_at',
+            'is_featured','is_sticky','allow_comments','allow_sharing','allow_rating',
+            'author_name','author_bio','author_avatar','author_id',
+            'meta','seo_data'
+        ]));
+
+        $user = Auth::user();
+        $articleData['updated_by'] = $user->id;
+
+        $article->update($articleData);
+
+        // Catégories
+        if (array_key_exists('categories', $data)) {
+            $categories = $this->parseIdsList($data['categories']);
+            $pivot = [];
+            foreach ($categories as $i => $cid) {
+                $pivot[$cid] = ['is_primary' => $i === 0, 'sort_order' => $i];
+            }
+            $article->categories()->sync($pivot);
+        }
+
+        // Tags
+        if (array_key_exists('tags', $data)) {
+            $tags = $this->parseIdsList($data['tags']);
+            $pivot = [];
+            foreach ($tags as $i => $tid) {
+                $pivot[$tid] = ['sort_order' => $i];
+            }
+            $article->tags()->sync($pivot);
+        }
+
+        DB::commit();
+
+        $article->load(['categories', 'tags', 'author', 'createdBy', 'updatedBy']);
+
+        // 🔔 Réponse API
+        $response = response()->json([
+            'message' => 'Article mis à jour avec succès',
+            'data'    => $article
         ]);
 
-        if ($validator->fails()) {
-            return response()->json([
-                'message' => 'Validation failed',
-                'errors'  => $validator->errors()
-            ], 422);
+        // 🔔 Envoi d'email uniquement si :
+        // - AVANT il n'était PAS "published"
+        // - APRÈS la mise à jour il est "published"
+        if (!$wasPublished && $article->status === ArticleStatus::PUBLISHED) {
+            app(\App\Http\Controllers\Api\NewsletterSubscriptionController::class)
+                ->notifyNewArticle($article);
         }
 
-        try {
-            DB::beginTransaction();
+        return $response;
 
-            $article = Article::find($id);
-            if (!$article) {
-                return response()->json(['message' => 'Article non trouvé'], 404);
-            }
+    } catch (\Throwable $e) {
+        DB::rollBack();
 
-            $articleData = array_intersect_key($data, array_flip([
-                'title','slug','excerpt','content',
-                'featured_image','featured_image_alt',
-                'status','visibility','password',
-                'published_at','scheduled_at','expires_at',
-                'is_featured','is_sticky','allow_comments','allow_sharing','allow_rating',
-                'author_name','author_bio','author_avatar','author_id',
-                'meta','seo_data'
-            ]));
-
-            $user = Auth::user();
-            $articleData['updated_by'] = $user->id;
-
-            $article->update($articleData);
-
-            // Catégories
-            if (array_key_exists('categories', $data)) {
-                $categories = $this->parseIdsList($data['categories']);
-                $pivot = [];
-                foreach ($categories as $i => $cid) {
-                    $pivot[$cid] = ['is_primary' => $i === 0, 'sort_order' => $i];
-                }
-                $article->categories()->sync($pivot);
-            }
-
-            // Tags
-            if (array_key_exists('tags', $data)) {
-                $tags = $this->parseIdsList($data['tags']);
-                $pivot = [];
-                foreach ($tags as $i => $tid) {
-                    $pivot[$tid] = ['sort_order' => $i];
-                }
-                $article->tags()->sync($pivot);
-            }
-
-            DB::commit();
-
-            $article->load(['categories', 'tags', 'author', 'createdBy', 'updatedBy']);
-
-            return response()->json([
-                'message' => 'Article mis à jour avec succès',
-                'data'    => $article
-            ]);
-
-        } catch (\Throwable $e) {
-            DB::rollBack();
-
-            return response()->json([
-                'message' => 'Erreur lors de la mise à jour de l\'article',
-                'error'   => $e->getMessage()
-            ], 500);
-        }
+        return response()->json([
+            'message' => 'Erreur lors de la mise à jour de l\'article',
+            'error'   => $e->getMessage()
+        ], 500);
     }
+}
+
 
     /* =========================================================
        Update (multipart + fichiers)
