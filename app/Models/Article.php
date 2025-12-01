@@ -14,7 +14,7 @@ use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Casts\Attribute;
 use Illuminate\Support\Str;
 use Illuminate\Support\Facades\Cache;
-
+// use App\Models\Societe; 
 class Article extends Model
 {
     use HasFactory, SoftDeletes;
@@ -448,5 +448,8 @@ public function isFavoritedBy($user)
     if (!$user) return false;
     return (bool) $this->reactions()->where('type', 'favorite')->where('user_id', $user->id)->exists();
 }
-
+// public function societe(): BelongsTo
+// {
+//     return $this->belongsTo(Societe::class, 'tenant_id');
+// }
 }

@@ -30,14 +30,17 @@ use App\Http\Controllers\Api\ArticleMediaController;
 use App\Http\Controllers\Api\ArticleQueryController;
 
 use App\Http\Controllers\Api\ArticleViewController;
+use App\Http\Controllers\Api\BureauController;
 use App\Http\Controllers\Api\FileDownloadController;
 use App\Http\Controllers\Api\ModerationController;
 use App\Http\Controllers\Api\NewsletterSubscriptionController;
 use App\Http\Controllers\Api\ReactionController;
 use App\Http\Controllers\Api\SearchSuggestionController;
+use App\Http\Controllers\Api\SocieteController;
 use App\Http\Controllers\FileProxyController;
 
 use App\Http\Controllers\PlatformUpdatesController;
+use App\Http\Controllers\PublicContactController;
 
 Route::get('/user', function (Request $request) {
     return $request->user();
@@ -52,19 +55,20 @@ Route::get('/check-db', function () {
 
 
 
-Route::post('/register', [AuthController::class, 'register']);
+Route::post('/register', [AuthController::class, 'register'])
+    ->middleware('throttle:5,1'); // 5 requêtes / minute / IP
 Route::get('/user/{id}/roles-permissions', [UserRolePermissionController::class, 'show'])->middleware('auth:sanctum');
 Route::get('/users-roles-permissions', [UserRolePermissionController::class, 'index'])->middleware('auth:sanctum');
 Route::post('/users', [UserCreationController::class, 'store']);
 
-Route::post('/login', [AuthController::class, 'login']);
-Route::get('/validate-unique', [AuthController::class, 'validateUnique']);
+Route::post('/login', [AuthController::class, 'login'])->middleware('throttle:5,1');
+Route::get('/validate-unique', [AuthController::class, 'validateUnique'])->middleware('throttle:30,1');
 
 // ✅ Vérification de la robustesse du mot de passe (policy serveur)
-Route::post('/password/validate', [AuthController::class, 'validatePassword']);
+Route::post('/password/validate', [AuthController::class, 'validatePassword'])->middleware('throttle:30,1');
 
 // ✅ Challenge des identifiants AVANT OTP (évite d'envoyer un code si le couple email+password est faux)
-Route::post('/login/challenge', [AuthController::class, 'loginChallenge']); //
+Route::post('/login/challenge', [AuthController::class, 'loginChallenge'])->middleware('throttle:10,1');
 
     Route::post('/logout', [AuthController::class, 'logout'])->middleware('auth:sanctum');
     Route::post('/user/{id}/avatar', [AuthController::class, 'updateAvatar'])->middleware('auth:sanctum');
@@ -410,3 +414,57 @@ Route::post('/newsletter/subscribe', [NewsletterSubscriptionController::class, '
 
 Route::get('/platform/status', [PlatformUpdatesController::class, 'status']);
 Route::get('/platform/updates', [PlatformUpdatesController::class, 'updates']);
+
+
+
+
+/*
+|--------------------------------------------------------------------------
+| Routes publiques (lecture seule)
+|--------------------------------------------------------------------------
+*/
+
+// Sociétés – lecture publique
+Route::get('/societes', [SocieteController::class, 'index']);
+Route::get('/societes/{societe}', [SocieteController::class, 'show']);
+
+// Bureaux – lecture publique
+Route::get('/bureaux', [BureauController::class, 'index']); // éventuellement filtrés par tenant ou publics
+Route::get('/bureaux/{bureau}', [BureauController::class, 'show']);
+
+// Bureaux d’une société – lecture publique
+Route::get('/societes/{societe}/bureaux', [BureauController::class, 'indexBySociete']);
+
+
+/*
+|--------------------------------------------------------------------------
+| Routes protégées (création / modification / suppression)
+|--------------------------------------------------------------------------
+*/
+
+Route::middleware('auth:sanctum')->group(function () {
+    // Sociétés – écriture
+    Route::post('/societes', [SocieteController::class, 'store']);
+    Route::match(['put', 'patch'], '/societes/{societe}', [SocieteController::class, 'update']);
+    Route::delete('/societes/{societe}', [SocieteController::class, 'destroy']);
+   Route::post('/societes/{societe}/active', [SocieteController::class, 'updateActive']);
+
+    // Bureaux – écriture
+    Route::post('/societes/{societe}/bureaux', [BureauController::class, 'store']);
+    Route::match(['put', 'patch'], '/bureaux/{bureau}', [BureauController::class, 'update']);
+    Route::delete('/bureaux/{bureau}', [BureauController::class, 'destroy']);
+});
+Route::middleware('auth:sanctum')->group(function () {
+    // Index custom
+    Route::get('bureaux', [BureauController::class, 'index']);
+
+    // Toutes les autres routes REST sauf index
+    Route::apiResource('bureaux', BureauController::class)->except(['index']);
+
+    Route::get('societes/{societe}/bureaux', [BureauController::class, 'indexBySociete']);
+    Route::post('bureaux/{bureau}/active', [BureauController::class, 'updateActive']);
+});
+Route::get('/public/bureaux-map', [BureauController::class, 'publicMap']);
+Route::get('/public/bureaux/{bureau}', [BureauController::class, 'publicShow']);
+
+Route::post('/public/contact', [PublicContactController::class, 'store'])->middleware('throttle:5,1');
