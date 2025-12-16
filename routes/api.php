@@ -32,13 +32,16 @@ use App\Http\Controllers\Api\ArticleQueryController;
 use App\Http\Controllers\Api\ArticleViewController;
 use App\Http\Controllers\Api\BureauController;
 use App\Http\Controllers\Api\FileDownloadController;
+use App\Http\Controllers\Api\MiradiaSlideController;
 use App\Http\Controllers\Api\ModerationController;
 use App\Http\Controllers\Api\NewsletterSubscriptionController;
 use App\Http\Controllers\Api\ReactionController;
 use App\Http\Controllers\Api\SearchSuggestionController;
 use App\Http\Controllers\Api\SocieteController;
+use App\Http\Controllers\ArticleSpotlightController;
 use App\Http\Controllers\FileProxyController;
-
+use App\Http\Controllers\OrgChartController;
+use App\Http\Controllers\OrgNodeController;
 use App\Http\Controllers\PlatformUpdatesController;
 use App\Http\Controllers\PublicContactController;
 
@@ -410,7 +413,8 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/moderation/pending',       [ModerationController::class, 'pending']);
 });
 
-Route::post('/newsletter/subscribe', [NewsletterSubscriptionController::class, 'store']);
+Route::post('/newsletter/subscribe', [NewsletterSubscriptionController::class, 'store'])->middleware('auth:sanctum');
+ Route::get('/newsletter/subscribers', [NewsletterSubscriptionController::class, 'index'])->middleware('auth:sanctum');
 
 Route::get('/platform/status', [PlatformUpdatesController::class, 'status']);
 Route::get('/platform/updates', [PlatformUpdatesController::class, 'updates']);
@@ -466,5 +470,50 @@ Route::middleware('auth:sanctum')->group(function () {
 });
 Route::get('/public/bureaux-map', [BureauController::class, 'publicMap']);
 Route::get('/public/bureaux/{bureau}', [BureauController::class, 'publicShow']);
-
+//controleur ana email envoyer et enregistrer contact
 Route::post('/public/contact', [PublicContactController::class, 'store'])->middleware('throttle:5,1');
+// ✅ routes "admin" pour la boîte de réception
+Route::middleware(['auth:sanctum'])->group(function () {
+    Route::get('/contact-messages', [PublicContactController::class, 'index']);
+    Route::delete('/contact-messages/{message}', [PublicContactController::class, 'destroy']);
+    Route::put('contact-messages/{contactMessage}/status', [PublicContactController::class, 'update']);
+
+});
+
+// controlleur pour l'article spotlight page d'acceuil, article épinglé, à la une et dernier article
+Route::get('/public/articles/spotlight', [ArticleSpotlightController::class, 'index']);
+
+
+
+
+
+/*
+|--------------------------------------------------------------------------
+| ROUTES MIRADIA 
+|--------------------------------------------------------------------------
+*/
+/*
+|--------------------------------------------------------------------------
+| SLIDE MIRADIAS
+|--------------------------------------------------------------------------
+*/
+
+Route::get('/miradia-slides', [MiradiaSlideController::class, 'index']);
+Route::get('/miradia-slides/{slide}', [MiradiaSlideController::class, 'show']);
+
+Route::post('/miradia-slides', [MiradiaSlideController::class, 'store'])->middleware('auth:sanctum');
+
+// update accepté en PUT, PATCH et via _method
+Route::match(['put', 'patch'], '/miradia-slides/{slide}', [MiradiaSlideController::class, 'update'])->middleware('auth:sanctum');
+
+Route::delete('/miradia-slides/{slide}', [MiradiaSlideController::class, 'destroy'])->middleware('auth:sanctum');
+
+// routes/api.php
+Route::prefix('orgnodes')->group(function () {
+    Route::post('/', [OrgNodeController::class, 'store']);
+    Route::get('/', [OrgNodeController::class, 'index']);
+    Route::put('/{id}', [OrgNodeController::class, 'update']);
+    Route::get('/{id}', [OrgNodeController::class, 'show']);
+    Route::delete('/{id}', [OrgNodeController::class, 'destroy']);
+});
+    Route::get('admin-users', [OrgNodeController::class, 'indexAdminUsers']);

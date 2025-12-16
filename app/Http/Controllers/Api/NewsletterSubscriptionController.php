@@ -7,9 +7,12 @@ use App\Models\NewsletterSubscription;
 use App\Models\Article;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Mail;
+use Illuminate\Http\JsonResponse;
+use Carbon\Carbon;
 
 class NewsletterSubscriptionController extends Controller
 {
+    
     /**
      * Abonnement à la newsletter + mail de bienvenue
      */
@@ -134,4 +137,82 @@ class NewsletterSubscriptionController extends Controller
         );
         */
     }
+    public function index(Request $request): JsonResponse
+    {
+        $perPage = (int) $request->input('per_page', 25);
+        $perPage = max(1, min($perPage, 200));
+
+        $search   = trim((string) ($request->input('q') ?? $request->input('search') ?? ''));
+        $status   = $request->input('status'); // all|active|unconfirmed|unsubscribed
+        $dateFrom = $request->input('date_from');
+        $dateTo   = $request->input('date_to');
+
+        $allowedSort = ['created_at', 'email', 'confirmed_at'];
+        $sortBy = $request->input('sort_by');
+
+        if (! in_array($sortBy, $allowedSort, true)) {
+            $sortBy = 'created_at';
+        }
+
+        $sortDirection = strtolower($request->input('sort_direction', 'desc')) === 'asc' ? 'asc' : 'desc';
+
+        $query = NewsletterSubscription::query();
+
+        // 🔍 Recherche texte (email + nom éventuel)
+        if ($search !== '') {
+            $query->where(function ($q) use ($search) {
+                $q->where('email', 'like', '%' . $search . '%');
+
+                if (schema()->hasColumn('newsletter_subscriptions', 'name')) {
+                    $q->orWhere('name', 'like', '%' . $search . '%');
+                }
+            });
+        }
+
+        // 🟢 Filtre status : à adapter selon ton schéma (confirmed_at / unsubscribed_at, etc.)
+        if ($status && $status !== 'all') {
+            $query->when($status === 'active', function ($q) {
+                // ex: abonnés confirmés et non désinscrits
+                $q->whereNotNull('confirmed_at')
+                  ->whereNull('unsubscribed_at');
+            });
+
+            $query->when($status === 'unconfirmed', function ($q) {
+                $q->whereNull('confirmed_at')
+                  ->whereNull('unsubscribed_at');
+            });
+
+            $query->when($status === 'unsubscribed', function ($q) {
+                $q->whereNotNull('unsubscribed_at');
+            });
+        }
+
+        // 📅 Filtre par plage de dates (sur created_at)
+        $query->when($dateFrom, function ($q) use ($dateFrom) {
+            try {
+                $from = Carbon::parse($dateFrom)->startOfDay();
+                $q->where('created_at', '>=', $from);
+            } catch (\Throwable $e) {
+                // ignore si date invalide
+            }
+        });
+
+        $query->when($dateTo, function ($q) use ($dateTo) {
+            try {
+                $to = Carbon::parse($dateTo)->endOfDay();
+                $q->where('created_at', '<=', $to);
+            } catch (\Throwable $e) {
+                // ignore si date invalide
+            }
+        });
+
+        // 🧮 Tri
+        $query->orderBy($sortBy, $sortDirection);
+
+        // 📦 Pagination standard Laravel -> ton normalizeList côté front s’adapte déjà
+        $subs = $query->paginate($perPage);
+
+        return response()->json($subs);
+    }
+
 }
