@@ -31,6 +31,7 @@ use App\Http\Controllers\Api\ArticleQueryController;
 
 use App\Http\Controllers\Api\ArticleViewController;
 use App\Http\Controllers\Api\BureauController;
+use App\Http\Controllers\Api\CmsSectionController;
 use App\Http\Controllers\Api\FileDownloadController;
 use App\Http\Controllers\Api\MiradiaSlideController;
 use App\Http\Controllers\Api\ModerationController;
@@ -511,9 +512,28 @@ Route::delete('/miradia-slides/{slide}', [MiradiaSlideController::class, 'destro
 // routes/api.php
 Route::prefix('orgnodes')->group(function () {
     Route::post('/', [OrgNodeController::class, 'store']);
+    Route::get('/slides', [OrgNodeController::class, 'slides']);
     Route::get('/', [OrgNodeController::class, 'index']);
-    Route::put('/{id}', [OrgNodeController::class, 'update']);
-    Route::get('/{id}', [OrgNodeController::class, 'show']);
-    Route::delete('/{id}', [OrgNodeController::class, 'destroy']);
+    Route::get('/{orgnode}', [OrgNodeController::class, 'show']);
+    Route::put('/{orgnode}', [OrgNodeController::class, 'update']);
+    Route::delete('/{orgnode}', [OrgNodeController::class, 'destroy']);
+    
 });
     Route::get('admin-users', [OrgNodeController::class, 'indexAdminUsers']);
+
+//  ROUTE POUR AFFICHER LES RESTES DU SITE CMS SECTIONS
+    Route::middleware('auth:sanctum')->group(function () {
+    Route::get('/cms-sections', [CmsSectionController::class, 'index']);
+    Route::get('/cms-sections/slot', [CmsSectionController::class, 'slot']);
+    Route::get('/cms-sections/{cmsSection}', [CmsSectionController::class, 'show']);
+
+    Route::post('/cms-sections', [CmsSectionController::class, 'store']);
+    Route::put('/cms-sections/{cmsSection}', [CmsSectionController::class, 'update']);
+    Route::patch('/cms-sections/{cmsSection}', [CmsSectionController::class, 'update']);
+
+    Route::delete('/cms-sections/{cmsSection}', [CmsSectionController::class, 'destroy']);
+
+    Route::post('/cms-sections/{cmsSection}/publish', [CmsSectionController::class, 'publish']);
+    Route::post('/cms-sections/{cmsSection}/unpublish', [CmsSectionController::class, 'unpublish']);
+    Route::post('/cms-sections/{cmsSection}/schedule', [CmsSectionController::class, 'schedule']);
+});
