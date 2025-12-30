@@ -114,7 +114,30 @@ class CmsSectionController extends Controller
 
         return response()->json(['data' => $cmsSection]);
     }
+   public function showpublic(Request $request, CmsSection $cmsSection)
+    {
+        // ✅ on ne sert que le contenu publié
+        if (strtolower((string) $cmsSection->status) !== 'published') {
+            abort(404);
+        }
 
+        // ✅ optionnel: vérifier le title=Mission si tu veux être strict
+        $title = $request->query('title');
+        if ($title && strcasecmp((string) $cmsSection->title, (string) $title) !== 0) {
+            abort(404);
+        }
+
+        return response()->json([
+            'id' => $cmsSection->id,
+            'title' => $cmsSection->title,
+            'status' => $cmsSection->status,
+            'project' => $cmsSection->project ?? null, // si tu stockes le JSON Grapes
+            'html' => $cmsSection->html ?? '',
+            'css' => $cmsSection->css ?? '',
+            'js' => $cmsSection->js ?? '',
+            'updated_at' => optional($cmsSection->updated_at)->toISOString(),
+        ]);
+    }
     /**
      * GET /api/cms-sections/slot?template=...&section=...&locale=fr&status=published|draft|pending
      */

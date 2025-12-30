@@ -71,6 +71,9 @@ class AppServiceProvider extends ServiceProvider
          Comment::observe(CommentObserver::class);
          ArticleShare::observe(ArticleShareObserver::class);
 
+    //     RateLimiter::for('contact_form', function (Request $request) {
+    //     return Limit::perMinute(5)->by($request->ip());
+    // });
          
     }
 

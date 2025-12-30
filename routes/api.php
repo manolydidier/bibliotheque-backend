@@ -537,3 +537,4 @@ Route::prefix('orgnodes')->group(function () {
     Route::post('/cms-sections/{cmsSection}/unpublish', [CmsSectionController::class, 'unpublish']);
     Route::post('/cms-sections/{cmsSection}/schedule', [CmsSectionController::class, 'schedule']);
 });
+    Route::get('/cms-sectionspublic/{cmsSection}', [CmsSectionController::class, 'showpublic']);
