@@ -197,6 +197,8 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/articles/with-files', [ArticleAddController::class, 'storeWithFiles']);
 Route::get('/articles-index', [ArticleQueryController::class, 'index']);
 });
+// afficher article pour le plateforme miradia, route publique sans auth
+    Route::get('/articlesMiradia', [ArticleController::class, 'indexMiradia']);
 
 // ========================================
 

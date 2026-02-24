@@ -387,7 +387,70 @@ class ArticleController extends Controller
             ],
         ]);
     }
+// ✅ Catégorie “lockée” (tu peux utiliser slug OU name)
+    private const MIRADIA_CATEGORY_NAME = 'Miradia';
 
+    public function indexMiradia(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'page'     => 'nullable|integer|min:1',
+            'per_page' => 'nullable|integer|min:1|max:100',
+            'search'   => 'nullable|string|max:255',
+        ]);
+
+        $perPage = (int)($validated['per_page'] ?? 12);
+        $search  = trim((string)($validated['search'] ?? ''));
+
+        $query = Article::query()
+            // ✅ Filtre catégorie Miradia (par NOM)
+            ->whereHas('categories', function ($q) {
+                $q->where('categories.name', self::MIRADIA_CATEGORY_NAME);
+            })
+
+            // ✅ Seulement public + published (tes enums/scopes)
+            ->public()
+            ->published()
+
+            // ✅ Recherche simple
+            ->when($search !== '', fn($q) => $q->search($search))
+
+            // ✅ Ordre récent (sticky/featured/published_at)
+            ->ordered()
+
+            // ✅ colonnes minimales (tu peux ajouter author_avatar etc.)
+            ->select([
+                'id',
+                'title',
+                'slug',
+                'excerpt',
+                'featured_image',
+                'featured_image_alt',
+                'author_name',
+                'published_at',
+                'created_at',
+            ]);
+
+        $paginator = $query->paginate($perPage)->appends($request->query());
+
+        return response()->json([
+            'data' => $paginator->items(),
+            'meta' => [
+                'current_page' => $paginator->currentPage(),
+                'per_page'     => $paginator->perPage(),
+                'total'        => $paginator->total(),
+                'last_page'    => $paginator->lastPage(),
+                'search'       => $search ?: null,
+                'category'     => self::MIRADIA_CATEGORY_NAME,
+                'sort'         => 'ordered()',
+            ],
+            'links' => [
+                'first' => $paginator->url(1),
+                'last'  => $paginator->url($paginator->lastPage()),
+                'prev'  => $paginator->previousPageUrl(),
+                'next'  => $paginator->nextPageUrl(),
+            ],
+        ]);
+    }
     /* =========================================================
      * SHOW (lit aussi le header X-Article-Password)
      * ========================================================= */
