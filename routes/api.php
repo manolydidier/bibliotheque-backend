@@ -197,8 +197,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/articles/with-files', [ArticleAddController::class, 'storeWithFiles']);
 Route::get('/articles-index', [ArticleQueryController::class, 'index']);
 });
-// afficher article pour le plateforme miradia, route publique sans auth
-    Route::get('/articlesMiradia', [ArticleController::class, 'indexMiradia']);
+
 
 // ========================================
 
@@ -505,6 +504,8 @@ Route::get('/miradia-slides', [MiradiaSlideController::class, 'index']);
 Route::get('/miradia-slides/{slide}', [MiradiaSlideController::class, 'show']);
 
 Route::post('/miradia-slides', [MiradiaSlideController::class, 'store'])->middleware('auth:sanctum');
+// afficher article pour le plateforme miradia, route publique sans auth
+    Route::get('/articlesMiradia', [ArticleController::class, 'indexMiradia']);
 
 // update accepté en PUT, PATCH et via _method
 Route::match(['put', 'patch'], '/miradia-slides/{slide}', [MiradiaSlideController::class, 'update'])->middleware('auth:sanctum');
@@ -524,8 +525,11 @@ Route::prefix('orgnodes')->group(function () {
     Route::get('admin-users', [OrgNodeController::class, 'indexAdminUsers']);
 
 //  ROUTE POUR AFFICHER LES RESTES DU SITE CMS SECTIONS
+    Route::get('/pagemiradia', [CmsSectionController::class, 'indexMiradia']);
+
     Route::middleware('auth:sanctum')->group(function () {
     Route::get('/cms-sections', [CmsSectionController::class, 'index']);
+
     Route::get('/cms-sections/slot', [CmsSectionController::class, 'slot']);
     Route::get('/cms-sections/{cmsSection}', [CmsSectionController::class, 'show']);
 

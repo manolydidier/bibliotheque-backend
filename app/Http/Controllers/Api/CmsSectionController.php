@@ -106,7 +106,41 @@ class CmsSectionController extends Controller
         $perPage = max(1, min(200, (int) $request->query('per_page', 20)));
         return response()->json($q->paginate($perPage));
     }
+public function indexMiradia(Request $request)
+{
+    $tenantId = $this->tenantId();
 
+    $q = CmsSection::query()->where('tenant_id', $tenantId)
+                            ->where('status', 'published') // Assurez-vous que seules les sections actives sont récupérées.
+                            ->whereNotIn('id', ['01', '02','03', '05','06']); // Exclure les articles spécifiques.
+
+    // filtres
+    if ($request->filled('status'))   $q->where('status', $request->string('status'));
+    if ($request->filled('category')) $q->where('category', $request->string('category'));
+    if ($request->filled('template')) $q->where('template', $request->string('template'));
+    if ($request->filled('section'))  $q->where('section', $request->string('section'));
+    if ($request->filled('locale'))   $q->where('locale', $request->string('locale'));
+
+    // search
+    if ($request->filled('q')) {
+        $needle = '%' . $request->string('q') . '%';
+        $q->where(function ($w) use ($needle) {
+            $w->where('title', 'like', $needle)
+                ->orWhere('category', 'like', $needle)
+                ->orWhere('template', 'like', $needle)
+                ->orWhere('section', 'like', $needle);
+        });
+    }
+
+    $q->orderBy('sort_order')->orderByDesc('updated_at');
+
+    if ((int) $request->query('all', 0) === 1) {
+        return response()->json(['data' => $q->get()]);
+    }
+
+    $perPage = max(1, min(200, (int) $request->query('per_page', 20)));
+    return response()->json($q->paginate($perPage));
+}
     public function show(Request $request, CmsSection $cmsSection)
     {
         $tenantId = $this->tenantId();

@@ -1,0 +1,3 @@
+mysqldump -u root -p --default-character-set=utf8 --no-tablespaces bibliotheque > "D:\kandra md2i\APIs LARAVEL BIBLIOTHEQUE EN LIGNE SAF FJKM\bibliotheque_backup.sql"
+set "TODAY=%DATE:~-4%-%DATE:~3,2%-%DATE:~0,2%"
+mysqldump -u root -p --default-character-set=utf8 --no-tablespaces bibliotheque > "D:\kandra md2i\APIs LARAVEL BIBLIOTHEQUE EN LIGNE SAF FJKM\bibliotheque_backup_%TODAY%.sql"
